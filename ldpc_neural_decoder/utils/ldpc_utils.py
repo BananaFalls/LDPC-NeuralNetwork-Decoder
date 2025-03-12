@@ -1,0 +1,147 @@
+import torch
+import numpy as np
+import pandas as pd
+
+def get_LLR_indexes(H_to_LLR_mapping_T):
+    """
+    Creates mapping tensors for check and variable nodes based on the parity check matrix.
+    
+    This function maps each LLR index to all other indices in the same row or column,
+    which is essential for message passing in LDPC decoding.
+
+    Args:
+        H_to_LLR_mapping_T (torch.Tensor): Transposed mapping matrix (num_vars, num_checks)
+
+    Returns:
+        tuple: (check_indices_matrix, var_indices_matrix)
+            - check_indices_matrix: 2D tensor where each row corresponds to an LLR index,
+              and columns contain indices of other LLRs in the same row.
+            - var_indices_matrix: 2D tensor where each row corresponds to an LLR index,
+              and columns contain indices of other LLRs in the same column.
+            Both use -1 for padding if needed.
+    """
+    num_ones = (H_to_LLR_mapping_T >= 0).sum().item()  # Number of valid LLR indices
+
+    # Dictionary to store shared indices for each LLR index
+    check_indices_dict = {i: [] for i in range(num_ones)}
+    var_indices_dict = {i: [] for i in range(num_ones)}
+
+    # Obtain Check Layer LLR Indexes
+    for row in range(H_to_LLR_mapping_T.shape[0]):
+        # Get valid indices (ignore -1)
+        check_indices = H_to_LLR_mapping_T[row][H_to_LLR_mapping_T[row] != -1]
+
+        # Map each LLR index to other LLR indices in the same row
+        for idx in check_indices:
+            check_indices_dict[idx.item()] = [j.item() for j in check_indices if j != idx]
+
+    # Obtain Variable Layer LLR Indexes
+    for row in range(H_to_LLR_mapping_T.T.shape[0]):
+        # Get valid indices (ignore -1)
+        var_indices = H_to_LLR_mapping_T.T[row][H_to_LLR_mapping_T.T[row] != -1]
+
+        # Map each LLR index to other LLR indices in the same row
+        for idx in var_indices:
+            var_indices_dict[idx.item()] = [j.item() for j in var_indices if j != idx]
+
+    # Convert dictionary to a padded 2D tensor
+    check_max_neighbors = max(len(v) for v in check_indices_dict.values())  # Find max list length
+    var_max_neighbours = max(len(v) for v in var_indices_dict.values())  # Find max list length
+
+    check_indices_matrix = torch.full((num_ones, check_max_neighbors), -1, dtype=torch.long)  # Initialize with -1
+    var_indices_matrix = torch.full((num_ones, var_max_neighbours), -1, dtype=torch.long)  # Initialize with -1
+
+    for i, neighbors in check_indices_dict.items():
+        check_indices_matrix[i, :len(neighbors)] = torch.tensor(neighbors)
+
+    for i, neighbors in var_indices_dict.items():
+        var_indices_matrix[i, :len(neighbors)] = torch.tensor(neighbors)
+
+    return check_indices_matrix, var_indices_matrix
+
+def create_LLR_mapping(H_T):
+    """
+    Creates a mapping from the parity check matrix to LLR indices.
+    
+    Args:
+        H_T (torch.Tensor): Transposed parity check matrix
+
+    Returns:
+        tuple: (H_to_LLR_mapping_T, check_LLR_matrix, var_LLR_matrix, output_index_tensor)
+            - H_to_LLR_mapping_T: Mapping from H indices to LLR indices
+            - check_LLR_matrix: Check node LLR indices
+            - var_LLR_matrix: Variable node LLR indices
+            - output_index_tensor: Output mapping indices
+    """
+    # Find indices where H_T == 1
+    row_indices, col_indices = (H_T == 1).nonzero(as_tuple=True)
+
+    # Create a mapping from (row, col) in H_T to LLR index
+    H_to_LLR_mapping = torch.full_like(H_T, -1, dtype=torch.long)  # Initialize with -1
+
+    # Assign LLR indices in natural order
+    for i, (row, col) in enumerate(zip(row_indices, col_indices)):
+        H_to_LLR_mapping[row, col] = i  # Map H index to LLR index
+
+    # Transpose the mapping matrix
+    H_to_LLR_mapping_T = H_to_LLR_mapping.T  # Transpose
+
+    # Compute the shared LLR tensor
+    check_LLR_matrix, var_LLR_matrix = get_LLR_indexes(H_to_LLR_mapping_T)
+    
+    # Create output index tensor (maps LLR indices to variable nodes)
+    output_index_tensor = row_indices.unsqueeze(0)
+    
+    return H_to_LLR_mapping_T, check_LLR_matrix, var_LLR_matrix, output_index_tensor
+
+def expand_base_matrix(base_matrix, Z):
+    """
+    Expands the given base matrix by replacing each entry with a ZxZ block.
+    - A zero block (-1 in base matrix) becomes a ZxZ zero matrix.
+    - A circulant shift value (0, 1, 2, 3) becomes a shifted identity matrix.
+    
+    Args:
+        base_matrix (torch.Tensor): Base matrix with shift values
+        Z (int): Lifting factor
+        
+    Returns:
+        torch.Tensor: Expanded parity-check matrix
+    """
+    rows, cols = base_matrix.shape
+    H_expanded = torch.zeros((rows * Z, cols * Z), dtype=torch.float32)
+
+    for i in range(rows):
+        for j in range(cols):
+            shift = base_matrix[i, j].item()
+            if shift == -1:
+                # Zero Block (ZxZ Zero Matrix)
+                H_expanded[i * Z:(i + 1) * Z, j * Z:(j + 1) * Z] = torch.zeros((Z, Z))
+            else:
+                # Circulant Shifted Identity Matrix
+                I_Z = torch.eye(Z)  # Identity Matrix of size ZxZ
+                I_Z = torch.roll(I_Z, shifts=int(shift), dims=1)  # Shift columns by "shift" value
+                H_expanded[i * Z:(i + 1) * Z, j * Z:(j + 1) * Z] = I_Z
+
+    return H_expanded
+
+def load_base_matrix(file_path):
+    """
+    Load a base matrix from a text file.
+    
+    Args:
+        file_path (str): Path to the text file containing the base matrix
+        
+    Returns:
+        torch.Tensor: Base matrix as a tensor
+    """
+    with open(file_path, 'r') as f:
+        lines = f.readlines()
+    
+    # Parse each line into a list of numbers
+    matrix = []
+    for line in lines:
+        # Split on whitespace and convert each piece to float
+        row = [float(x) for x in line.split()]
+        matrix.append(row)
+    
+    return torch.tensor(matrix) 

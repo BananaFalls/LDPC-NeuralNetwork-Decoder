@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"path": "../Firebase_test"
+		},
+		{
+			"name": "Firebase_test",
+			"path": "../Firebase_test/Firebase_test/Firebase_test"
+		},
+		{
+			"name": "ESP32SENSORS",
+			"path": "../../Documents/PlatformIO/Projects/ESP32SENSORS"
+		}
+	],
+	"settings": {}
+}
