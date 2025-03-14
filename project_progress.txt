@@ -1,0 +1,52 @@
+# LDPC Neural Decoder Project Progress
+
+## Overview
+This project implements a Message-Centered Graph Neural Network (GNN) LDPC decoder with custom min-sum algorithm implementations for both variable and check node updates. The goal is to combine traditional LDPC decoding algorithms with neural network approaches for improved performance.
+
+## Current Implementation
+1. **Custom Variable Layer**: 
+   - Successfully implemented a custom variable layer update using the min-sum algorithm with residual connections
+   - Created `CustomVariableMessageGNNLayer` class that extends `MessageGNNLayer`
+   - Implemented `variable_layer_update` method that follows traditional LDPC decoding principles
+
+2. **Custom Check Layer**:
+   - Working on implementing a min-sum check layer update
+   - Will replace the neural network approach with traditional min-sum algorithm
+   - Need to implement the check layer update function based on the provided code
+
+3. **Combined Custom Decoder**:
+   - Combined custom decoder that uses both min-sum variable and check updates
+   - Helper functions to create index tensors for efficient message passing
+
+4. **QPSK Modulation**:
+   - The system uses QPSK modulation rather than BPSK
+   - Implemented `AWGNChannel` class for simulating transmission through an AWGN channel
+
+## What's Completed
+- Custom variable layer implementation
+- Custom check layer implementation
+- Combined custom min-sum decoder
+- Example scripts for both implementations
+- Integration with the existing GNN architecture
+
+## Next Steps
+1. Complete the implementation of the custom check layer using min-sum algorithm
+2. Create a new decoder class that uses both custom variable and check layers
+3. Create helper functions to easily instantiate the custom decoder
+4. Update example scripts to demonstrate the use of the fully custom decoder
+5. Evaluate performance compared to neural and traditional approaches
+6. Evaluate the performance of the custom min-sum decoder against neural network-based decoders
+7. Experiment with different scaling factors for the min-sum algorithm
+8. Implement more advanced decoding algorithms (e.g., normalized min-sum, offset min-sum)
+9. Create a comprehensive comparison of different decoding approaches
+
+## Project Structure
+- `models/message_gnn_decoder.py`: Contains the main implementation of the Message GNN decoder
+- `models/layers.py`: Contains implementations of various layers used in LDPC decoding
+- `utils/channel.py`: Contains channel simulation code including QPSK modulation and AWGN channel
+- `examples/custom_variable_layer_example.py`: Example script demonstrating the custom variable layer
+
+## Notes
+- The custom variable layer implementation has been tested and is working correctly
+- The check layer implementation will follow a similar pattern to the variable layer
+- Both implementations maintain compatibility with the existing GNN architecture 

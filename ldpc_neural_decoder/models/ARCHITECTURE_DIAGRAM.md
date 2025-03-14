@@ -173,7 +173,7 @@ In the message-centered approach, each message node aggregates information from 
     │     c. Apply neural network                           │
     │        check_to_var = NN_CV(input)                    │
     │                                                       │
-    │  5. Combine updates (with residual connection)        │
+    │  5. Combine updates                                   │
     │     updated = var_to_check + check_to_var             │
     │                                                       │
     └───────────────────────────────────────────────────────┘
@@ -183,7 +183,7 @@ In the message-centered approach, each message node aggregates information from 
 
 ## Complete Decoder Architecture
 
-### Message-Centered GNN Decoder
+### Message-Centered GNN Decoder with Residual Connections
 ```
     Input: Channel LLRs [batch_size, num_variables]
     
@@ -193,31 +193,79 @@ In the message-centered approach, each message node aggregates information from 
     │     message_llrs = message_to_var_mapping * llrs      │
     │     message_features = input_embedding(message_llrs)  │
     │                                                       │
-    │  2. Iterative GNN decoding                            │
+    │  2. Initialize storage for previous layer outputs     │
+    │     previous_VL_storage = deque(maxlen=depth_L)       │
+    │                                                       │
+    │  3. Iterative GNN decoding with residual connections  │
     │     for i = 1 to num_iterations:                      │
-    │         message_features = gnn_layers[i](            │
+    │         # Get current features from GNN layer         │
+    │         current_features = gnn_layers[i](             │
     │             message_features,                         │
     │             message_types,                            │
     │             var_to_check_adjacency,                   │
     │             check_to_var_adjacency                    │
     │         )                                             │
     │                                                       │
-    │  3. Decode final message features to LLRs             │
+    │         # Apply channel weighting                     │
+    │         weighted_LLR = w_ch * current_features        │
+    │                                                       │
+    │         # Initialize residual contribution            │
+    │         res_contrib = zeros_like(current_features)    │
+    │                                                       │
+    │         # Add contributions from previous layers      │
+    │         for t = 1 to min(depth_L, i):                 │
+    │             res_contrib += w_res[t-1] *               │
+    │                           previous_VL_storage[-t]     │
+    │                                                       │
+    │         # Compute new variable node messages          │
+    │         message_features = current_features +         │
+    │                           weighted_LLR + res_contrib  │
+    │                                                       │
+    │         # Store for future residual connections       │
+    │         previous_VL_storage.append(message_features)  │
+    │                                                       │
+    │  4. Decode final message features to LLRs             │
     │     final_llrs = decode_messages(message_features)    │
     │                                                       │
-    │  4. Aggregate message LLRs to variable nodes          │
+    │  5. Aggregate message LLRs to variable nodes          │
     │     variable_llrs = final_llrs * var_to_message_map   │
     │                                                       │
-    │  5. Add input LLRs                                    │
+    │  6. Add input LLRs                                    │
     │     combined_llrs = variable_llrs + input_llrs        │
     │                                                       │
-    │  6. Convert to soft/hard bits                         │
+    │  7. Convert to soft/hard bits                         │
     │     soft_bits = sigmoid(combined_llrs)                │
     │     hard_bits = (soft_bits > 0.5).float()             │
     │                                                       │
     └───────────────────────────────────────────────────────┘
     
     Output: Decoded Bits [batch_size, num_variables]
+```
+
+## Residual Connection Visualization
+
+```
+    Layer 1 Output ──────┐
+                         │
+    Layer 2 Output ──────┼───┐
+                         │   │
+    Layer 3 Output ──────┼───┼───┐
+                         │   │   │
+                         ▼   ▼   ▼
+    Layer 4 Input  = w_ch * Layer 4 + w_res[0] * Layer 3 + w_res[1] * Layer 2 + w_res[2] * Layer 1
+    
+    
+    Weighted Residual Connection Flow:
+    
+    ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐
+    │ Layer 1 │────▶│ Layer 2 │────▶│ Layer 3 │────▶│ Layer 4 │
+    └─────────┘     └─────────┘     └─────────┘     └─────────┘
+         │               │               │               ▲
+         │               │               └───────────────┤
+         │               └───────────────────────────────┤
+         └───────────────────────────────────────────────┘
+         
+         w_res[2]        w_res[1]        w_res[0]       w_ch
 ```
 
 ## Parameter Efficiency Comparison

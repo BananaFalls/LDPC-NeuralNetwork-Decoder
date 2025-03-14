@@ -1,0 +1,43 @@
+# Implementation Steps for Custom Check Layer
+
+## Step 1: Create the CustomCheckMessageGNNLayer class
+1. Create a new class `CustomCheckMessageGNNLayer` that extends `MessageGNNLayer`
+2. Keep the original initialization but add a learnable scaling factor `alpha` for the min-sum algorithm
+3. Implement the `check_layer_update` method based on the provided code
+
+## Step 2: Create the check index tensor helper function
+1. Implement `create_check_index_tensor` function similar to the existing `create_variable_index_tensor`
+2. This function should map check nodes to their connected message indices
+3. Handle -1 padding for variable-length connections
+
+## Step 3: Create a combined custom decoder
+1. Create a new class `CustomMinSumMessageGNNDecoder` that extends `MessageGNNDecoder`
+2. Replace the GNN layers with custom layers that use both min-sum variable and check updates
+3. Add storage for both variable and check index tensors
+4. Implement setter methods for both index tensors
+
+## Step 4: Create a helper function for the combined decoder
+1. Implement `create_custom_minsum_message_gnn_decoder` function
+2. This function should create both variable and check index tensors
+3. Initialize the decoder with the custom layers and set both index tensors
+
+## Step 5: Update the module's __init__.py
+1. Add the new classes and functions to the module's exports
+2. Ensure backward compatibility with existing code
+
+## Step 6: Create an example script
+1. Create a new example script `custom_minsum_example.py`
+2. Demonstrate how to use the fully custom decoder with both min-sum variable and check updates
+3. Include training and evaluation code similar to the existing example
+
+## Step 7: Test and evaluate
+1. Compare performance with neural network-based decoders
+2. Compare performance with traditional min-sum decoders
+3. Analyze the impact of the learnable scaling factor
+
+## Code Integration Notes
+- The `check_layer_update` function should follow the same pattern as the provided code
+- Make sure to handle edge cases like empty connections
+- Ensure compatibility with the existing architecture
+- Keep the neural network components for compatibility, but don't use them for check updates
+- The scaling factor `alpha` should be learnable to optimize performance 

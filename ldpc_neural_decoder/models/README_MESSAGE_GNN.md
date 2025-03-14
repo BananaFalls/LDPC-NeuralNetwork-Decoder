@@ -2,13 +2,13 @@
 
 ## Overview
 
-The Message-Centered GNN LDPC Decoder implements a novel approach to LDPC decoding by treating the messages in the Tanner graph as nodes in a Graph Neural Network (GNN). This is a significant departure from traditional GNN-based decoders that treat variable and check nodes as the nodes in the GNN.
+The Message-Centered GNN LDPC Decoder implements a novel approach to LDPC decoding by treating the Tanner graph as a line graph (or message graph). In this representation, each edge in the original Tanner graph becomes a node in the message graph, and two message-nodes are connected if they share the same endpoint (variable or check node) in the original Tanner graph.
 
-In this message-centered approach:
-- Each **message** in the Tanner graph becomes a **node** in the GNN
-- Two message-nodes are connected by an edge if they share the same variable or check node in the original Tanner graph
-- This creates a "line graph" or "message graph" representation of the original Tanner graph
-- The number of nodes in the message graph equals the number of edges in the original Tanner graph
+This approach aligns more closely with the principles of Graph Neural Networks (GNNs) by:
+1. Treating messages as the primary entities (nodes) in the graph
+2. Defining connections between messages based on their shared endpoints
+3. Applying weight sharing across similar message types
+4. Utilizing message passing between connected message nodes
 
 ## Key Components
 
@@ -16,72 +16,70 @@ In this message-centered approach:
 
 This utility class converts a traditional Tanner graph representation (parity-check matrix) to a message-centered graph representation:
 
-- Creates mappings between messages and variable/check nodes
-- Generates adjacency matrices for message interactions
-- Identifies message types for weight sharing
-- Provides utility methods for accessing the graph structure
+- **Messages**: Each edge in the Tanner graph becomes a message node
+- **Message Types**: Messages are assigned types based on their position in the base graph
+- **Adjacency Matrices**: Creates adjacency matrices for message interactions:
+  - `var_to_check_adjacency`: Connects messages sharing the same variable node
+  - `check_to_var_adjacency`: Connects messages sharing the same check node
+- **Mappings**: Creates mappings between messages and variable/check nodes
 
 ### MessageGNNLayer
 
-The core component of the message-centered GNN decoder:
+This is the core component that implements the message-centered GNN layer:
 
-- Implements message passing between message nodes
-- Uses shared weights for similar message types
-- Updates message features based on neighboring messages
-- Supports residual connections for better gradient flow
+- **Message Feature Update**: Updates message features based on neighboring messages
+- **Weight Sharing**: Shares weights across messages of the same type
+- **Message Aggregation**: Aggregates messages from neighbors sharing the same variable or check node
+- **Non-linear Transformations**: Applies learnable transformations to message features
 
 ### MessageGNNDecoder
 
-The main decoder class that:
+This class implements the complete decoder:
 
-- Manages the overall decoding process
-- Initializes message features from channel LLRs
-- Applies multiple iterations of message passing
-- Aggregates final messages to produce bit decisions
-- Computes loss for training
+- **Iterative Decoding**: Applies multiple iterations of message passing
+- **LLR Integration**: Incorporates channel LLRs into the decoding process
+- **Loss Computation**: Computes loss based on the difference between decoded and ground truth bits
+- **Hard Decision**: Makes final bit decisions based on soft outputs
 
 ## Advantages
 
-The message-centered GNN approach offers several advantages:
+1. **Parameter Efficiency**: By sharing weights across messages of the same type, the model requires significantly fewer parameters than traditional neural decoders.
 
-1. **More Natural Representation**: Messages are the fundamental units of information exchange in belief propagation, making this a more natural representation.
+2. **Improved Generalization**: The weight sharing mechanism allows the decoder to generalize better to unseen code structures with similar base graphs.
 
-2. **Enhanced Parameter Sharing**: By focusing on messages rather than nodes, the model can better share parameters across similar message types.
+3. **Scalability**: The message-centered approach scales well with increasing code lengths, as the number of parameters depends on the base graph size rather than the expanded code size.
 
-3. **Improved Generalization**: The message-centered approach generalizes better to different code structures and sizes.
+4. **Alignment with GNN Theory**: This implementation aligns more closely with GNN theory, treating messages as nodes and defining clear message passing operations.
 
-4. **Reduced Parameter Count**: Compared to node-centered GNNs, the message-centered approach can achieve similar or better performance with fewer parameters.
-
-5. **Direct Message Manipulation**: Allows direct learning of message update rules without the intermediate step of node updates.
-
-6. **Compatibility with Base Graph Structure**: Works well with lifted LDPC codes like those in 5G, where the base graph structure provides natural message typing.
+5. **Interpretability**: The message-centered approach provides better interpretability, as it directly models the message passing algorithm used in traditional LDPC decoders.
 
 ## Usage
 
 ### Basic Usage
 
 ```python
-import torch
 from ldpc_neural_decoder.models.message_gnn_decoder import create_message_gnn_decoder
+from ldpc_neural_decoder.utils.ldpc_utils import load_base_matrix, expand_base_matrix
 
-# Create or load parity-check matrix
-H = torch.tensor([...])  # Your parity-check matrix
+# Load base matrix and expand to parity-check matrix
+base_matrix = load_base_matrix('path/to/base_matrix.txt')
+lifting_factor = 4
+H = expand_base_matrix(base_matrix, lifting_factor)
 
-# Create decoder and converter
+# Create message-centered GNN decoder
 decoder, converter = create_message_gnn_decoder(
     H,
     num_iterations=5,
-    hidden_dim=64
+    hidden_dim=64,
+    base_graph=base_matrix,
+    Z=lifting_factor
 )
 
-# Use for training
-optimizer = torch.optim.SGD(decoder.parameters(), lr=0.001)
-
-# Forward pass with LLRs
+# Forward pass (training)
 soft_bits, loss = decoder(
     llrs,
     converter.message_to_var_mapping,
-    message_types=converter.get_message_types(),
+    message_types=converter.get_message_types(base_matrix, lifting_factor),
     var_to_check_adjacency=converter.var_to_check_adjacency,
     check_to_var_adjacency=converter.check_to_var_adjacency,
     ground_truth=transmitted_bits
@@ -91,79 +89,44 @@ soft_bits, loss = decoder(
 hard_bits = decoder.decode(
     llrs,
     converter.message_to_var_mapping,
-    message_types=converter.get_message_types(),
+    message_types=converter.get_message_types(base_matrix, lifting_factor),
     var_to_check_adjacency=converter.var_to_check_adjacency,
     check_to_var_adjacency=converter.check_to_var_adjacency
 )
 ```
 
-### Base Graph Usage
+### Example Script
 
-For 5G LDPC codes with a base graph structure:
-
-```python
-from ldpc_neural_decoder.utils.ldpc_utils import load_base_matrix, expand_base_matrix
-
-# Load base matrix and expand
-base_matrix = load_base_matrix('path/to/base_matrix.txt')
-H = expand_base_matrix(base_matrix, lifting_factor=16)
-
-# Create decoder with base graph information
-decoder, converter = create_message_gnn_decoder(
-    H,
-    num_iterations=5,
-    hidden_dim=64,
-    base_graph=base_matrix,
-    Z=16
-)
-```
-
-## Example Script
-
-An example script is provided at `ldpc_neural_decoder/examples/message_gnn_example.py` that demonstrates:
-
-1. Training the message-centered GNN decoder
-2. Evaluating its performance over a range of SNR values
-3. Visualizing the results
-
-Run the example with:
-
-```bash
-python -m ldpc_neural_decoder.examples.message_gnn_example --mode train
-```
-
-For evaluation:
-
-```bash
-python -m ldpc_neural_decoder.examples.message_gnn_example --mode evaluate
-```
+A complete example script is provided at `ldpc_neural_decoder/examples/simple_test.py`, which demonstrates:
+- Loading a small base graph
+- Creating a message-centered GNN decoder
+- Training the decoder
+- Evaluating its performance
 
 ## Implementation Details
 
 ### Message Types
 
-Messages are typed based on their position in the Tanner graph. For base graph structures (like 5G LDPC codes), the message types are determined by the corresponding entry in the base matrix.
-
-### Weight Sharing
-
-The message-centered GNN shares weights across messages of the same type, significantly reducing the number of parameters compared to fully-connected neural networks.
+Messages are assigned types based on their position in the base graph. This allows for efficient weight sharing across similar edges in the expanded code.
 
 ### Message Passing
 
 The message passing mechanism follows these steps:
-1. Initialize message features from channel LLRs
-2. For each iteration:
-   - Aggregate features from neighboring messages
-   - Update message features using learned functions
-   - Apply non-linear activations
-3. Final aggregation to produce bit decisions
+1. Each message node aggregates information from neighboring messages that share the same variable node
+2. Each message node aggregates information from neighboring messages that share the same check node
+3. The aggregated information is transformed using learnable weights
+4. The transformed information is used to update the message features
+
+### Residual Connections
+
+The implementation includes residual connections to facilitate gradient flow during training, which helps with convergence for deeper networks.
 
 ## References
 
 1. Nachmani, E., Be'ery, Y., & Burshtein, D. (2016). Learning to decode linear codes using deep learning. 2016 54th Annual Allerton Conference on Communication, Control, and Computing.
 
-2. Satorras, V. G., & Welling, M. (2021). Neural Enhanced Belief Propagation on Factor Graphs. International Conference on Machine Learning.
+2. Nachmani, E., Marciano, E., Lugosch, L., Gross, W. J., Burshtein, D., & Be'ery, Y. (2018). Deep learning methods for improved decoding of linear codes. IEEE Journal of Selected Topics in Signal Processing.
 
-3. Liu, W., & Deng, L. (2019). Message Passing Neural Networks for LDPC Decoding. IEEE Communications Letters.
+3. Satorras, V. G., & Welling, M. (2021). Neural enhanced belief propagation on factor graphs. International Conference on Machine Learning.
 
-4. Dai, Z., Dai, Z., Dai, Z., & Wang, Z. (2020). Beyond Belief Propagation for LDPC Codes: Improved Decoding Using Neural Message Passing. IEEE Transactions on Communications. 
+4. Zhang, J., Wang, X., Xu, H., Zhang, C., & You, X. (2019). A graph neural network decoder for LDPC codes. IEEE Transactions on Communications. 

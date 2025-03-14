@@ -44,8 +44,8 @@ ldpc_neural_decoder/
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/message-centered-gnn-ldpc.git
-cd message-centered-gnn-ldpc
+git clone https://github.com/BananaFalls/LDPC-NeuralNetwork-Decoder.git
+cd LDPC-NeuralNetwork-Decoder
 ```
 
 2. Create a virtual environment:
