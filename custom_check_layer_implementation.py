@@ -42,11 +42,11 @@ class CustomCheckMessageGNNLayer(nn.Module):  # Replace with MessageGNNLayer in 
         
         # For check-to-variable updates, we'll use min-sum instead of neural network
         # We'll still keep the network structure for compatibility, but won't use it
-        self.check_to_var_update = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
+        # self.check_to_var_update = nn.Sequential(
+        #     nn.Linear(hidden_dim * 2, hidden_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(hidden_dim, hidden_dim)
+        # )
         
         # Output projection
         self.input_embedding = nn.Linear(1, hidden_dim)

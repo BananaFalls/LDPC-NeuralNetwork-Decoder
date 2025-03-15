@@ -193,102 +193,149 @@ class MessageGNNDecoder(nn.Module):
         Forward pass of the Message GNN Decoder.
         
         Args:
-            input_llr (torch.Tensor): Input LLRs from channel of shape (batch_size, num_variables)
-            message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes of shape (num_messages, num_variables)
-            message_types (torch.Tensor, optional): Type indices for each message of shape (num_messages,)
-            var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for variable-to-check messages of shape (num_messages, num_messages)
-            check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-variable messages of shape (num_messages, num_messages)
-            ground_truth (torch.Tensor, optional): True bits (0 or 1) of shape (batch_size, num_variables)
+            input_llr (torch.Tensor): Input LLR values for each variable node
+            message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes
+            message_types (torch.Tensor, optional): Types of each message for weight sharing
+            var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for var-to-check messages
+            check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-var messages
+            ground_truth (torch.Tensor, optional): Ground truth codeword for training
             
         Returns:
-            tuple: (soft_bits, loss)
-                - soft_bits (torch.Tensor): Soft bit values (probabilities) of shape (batch_size, num_variables)
-                - loss (torch.Tensor, optional): Loss value if ground_truth is provided
+            torch.Tensor: Decoded codeword probabilities
         """
-        batch_size, num_variables = input_llr.shape
-        device = input_llr.device
+        print("\n===== Starting Message GNN Decoder Forward Pass =====")
+        print(f"Input LLR shape: {input_llr.shape}")
+        print(f"Message to var mapping shape: {message_to_var_mapping.shape}")
         
-        # If message types not provided, assume all messages are of the same type
+        batch_size = input_llr.shape[0]
+        num_vars = input_llr.shape[1]
+        
+        # Initialize message features directly from input LLRs without embedding
+        # First create a tensor to hold the raw LLR values for each message
+        message_llrs = torch.zeros(batch_size, self.num_messages, device=input_llr.device)
+        
+        # Map input LLRs to messages directly
+        for b in range(batch_size):
+            # Check if message_to_var_mapping is 2D
+            if len(message_to_var_mapping.shape) > 1:
+                # If it's 2D, we need to extract just the first column
+                # This assumes the first column contains the variable indices
+                var_indices = message_to_var_mapping[:, 0]
+            else:
+                # If it's already 1D, use it directly
+                var_indices = message_to_var_mapping
+            
+            # Copy the LLR values directly from variable nodes to message nodes
+            message_llrs[b] = input_llr[b][var_indices]
+        
+        print(f"Initialized message LLRs shape: {message_llrs.shape}")
+        
+        # Since we're using a higher hidden_dim, we'll use the input_embedding to transform
+        # the scalar LLRs into higher-dimensional feature vectors
+        message_features = self.input_embedding(message_llrs.unsqueeze(-1))
+        
+        print(f"Embedded message features shape: {message_features.shape}")
+        
+        # If message types not provided, use default (all same type)
         if message_types is None:
-            message_types = torch.zeros(self.num_messages, dtype=torch.long, device=device)
+            message_types = torch.zeros(self.num_messages, dtype=torch.long, device=input_llr.device)
         
-        # If adjacency matrices not provided, create dummy ones
-        if var_to_check_adjacency is None:
-            var_to_check_adjacency = torch.eye(self.num_messages, device=device)
+        # Store all intermediate message features for residual connections
+        all_message_features = [message_features]
         
-        if check_to_var_adjacency is None:
-            check_to_var_adjacency = torch.eye(self.num_messages, device=device)
-        
-        # Initialize message features from input LLRs
-        # Map variable node LLRs to message nodes
-        message_llrs = torch.matmul(message_to_var_mapping, input_llr.unsqueeze(-1)).squeeze(-1)  # (num_messages, batch_size)
-        message_llrs = message_llrs.transpose(0, 1)  # (batch_size, num_messages)
-        
-        # Embed message LLRs
-        message_features = self.input_embedding(message_llrs.unsqueeze(-1))  # (batch_size, num_messages, hidden_dim)
-        
-        # Iterative GNN decoding
+        # Iterative message passing
         for i in range(self.num_iterations):
-            # Update message features using GNN layer
-            message_features = self.gnn_layers[i](
-                message_features, 
-                message_types, 
+            print(f"\n----- Iteration {i+1}/{self.num_iterations} -----")
+            
+            # Apply GNN layer
+            new_message_features = self.gnn_layers[i](
+                all_message_features[-1], 
+                message_types,
                 var_to_check_adjacency, 
                 check_to_var_adjacency
             )
+            
+            print(f"Updated message features shape: {new_message_features.shape}")
+            
+            # Apply residual connection if not the first layer
+            if i > 0:
+                new_message_features = new_message_features + all_message_features[-1]
+                print("Applied residual connection")
+            
+            all_message_features.append(new_message_features)
         
-        # Decode final message features to LLR values
-        final_message_llrs = self.gnn_layers[-1].decode_messages(message_features)  # (batch_size, num_messages)
+        # Decode final messages to get codeword probabilities
+        print("\n----- Final Decoding Stage -----")
+        final_messages = all_message_features[-1]
+        decoded_llrs = self.gnn_layers[-1].decode_messages(final_messages)
         
-        # Aggregate message LLRs to variable nodes
-        # Transpose message_to_var_mapping for aggregation
-        var_to_message_mapping = message_to_var_mapping.transpose(0, 1)  # (num_variables, num_messages)
+        # Aggregate messages for each variable node
+        output_probs = torch.zeros(batch_size, num_vars, device=input_llr.device)
         
-        # Normalize the mapping for weighted average
-        var_to_message_mapping = var_to_message_mapping / (var_to_message_mapping.sum(dim=1, keepdim=True) + 1e-10)
+        print("Using SUM aggregation for mapping message nodes to variable bits")
         
-        # Ensure final_message_llrs has the correct shape (batch_size, num_messages)
-        if final_message_llrs.shape[0] != batch_size:
-            final_message_llrs = final_message_llrs.transpose(0, 1)
+        for b in range(batch_size):
+            # Initialize tensor to store sum of messages for each variable node
+            var_llrs = torch.zeros(num_vars, device=input_llr.device)
+            
+            # Count number of messages per variable node for potential normalization
+            message_counts = torch.zeros(num_vars, device=input_llr.device)
+            
+            # Sum all messages going to each variable node
+            for msg_idx in range(self.num_messages):
+                # Get the variable index for this message
+                if len(message_to_var_mapping.shape) > 1:
+                    # If message_to_var_mapping is 2D, get the first column
+                    var_idx = message_to_var_mapping[msg_idx, 0].item()
+                else:
+                    # If it's 1D, use it directly
+                    var_idx = message_to_var_mapping[msg_idx].item()
+                
+                var_llrs[var_idx] += decoded_llrs[b, msg_idx]
+                message_counts[var_idx] += 1
+            
+            # Add input LLRs to the summed messages
+            combined_llrs = var_llrs + input_llr[b]
+            
+            # Convert to probabilities
+            output_probs[b] = combined_llrs
         
-        # Aggregate messages to variables
-        variable_llrs = torch.matmul(final_message_llrs, var_to_message_mapping.t())  # (batch_size, num_variables)
+        print(f"Output LLRs shape: {output_probs.shape}")
+        print(f"Output LLRs range: [{output_probs.min().item():.4f}, {output_probs.max().item():.4f}]")
         
-        # Add input LLRs
-        combined_llrs = variable_llrs + input_llr
+        # Apply sigmoid to get probabilities
+        output_probs = torch.sigmoid(output_probs)
         
-        # Convert to soft bits
-        soft_bits = torch.sigmoid(combined_llrs)
+        print(f"Final output probabilities range: [{output_probs.min().item():.4f}, {output_probs.max().item():.4f}]")
+        print("===== Completed Message GNN Decoder Forward Pass =====\n")
         
-        # Compute loss if ground truth is provided
+        # If ground truth is provided, compute loss for training
         if ground_truth is not None:
-            # Binary cross-entropy loss
-            loss = F.binary_cross_entropy(soft_bits, ground_truth, reduction='none')
-            
-            # Apply max function over the loss vector (for FER minimization)
-            max_loss = torch.max(loss, dim=1).values
-            
-            return soft_bits, max_loss
+            loss = F.binary_cross_entropy(output_probs, ground_truth.float())
+            return output_probs, loss
         
-        return soft_bits, None
+        return output_probs
     
     def decode(self, input_llr, message_to_var_mapping, message_types=None, 
                var_to_check_adjacency=None, check_to_var_adjacency=None):
         """
-        Decode input LLRs to hard bit decisions.
+        Decode the input LLRs to get the estimated codeword.
         
         Args:
-            input_llr (torch.Tensor): Input LLRs from channel of shape (batch_size, num_variables)
-            message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes of shape (num_messages, num_variables)
-            message_types (torch.Tensor, optional): Type indices for each message of shape (num_messages,)
-            var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for variable-to-check messages of shape (num_messages, num_messages)
-            check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-variable messages of shape (num_messages, num_messages)
+            input_llr (torch.Tensor): Input LLR values for each variable node
+            message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes
+            message_types (torch.Tensor, optional): Types of each message for weight sharing
+            var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for var-to-check messages
+            check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-var messages
             
         Returns:
-            torch.Tensor: Hard bit decisions (0 or 1) of shape (batch_size, num_variables)
+            torch.Tensor: Hard-decision decoded codeword
         """
-        # Get soft bit values
-        soft_bits, _ = self.forward(
+        print("\n===== Starting Message GNN Decoder Decoding =====")
+        print(f"Input LLR shape: {input_llr.shape}")
+        
+        # Get soft bit probabilities
+        soft_bits = self.forward(
             input_llr, 
             message_to_var_mapping, 
             message_types, 
@@ -296,8 +343,12 @@ class MessageGNNDecoder(nn.Module):
             check_to_var_adjacency
         )
         
-        # Convert to hard decisions
+        # Hard decision decoding
         hard_bits = (soft_bits > 0.5).float()
+        
+        print(f"Hard decision bits shape: {hard_bits.shape}")
+        print(f"Sample of decoded bits: {hard_bits[0, :10]}")
+        print("===== Completed Message GNN Decoder Decoding =====\n")
         
         return hard_bits
 
@@ -559,40 +610,64 @@ class CustomVariableMessageGNNLayer(MessageGNNLayer):
         
     def variable_layer_update(self, input_mapping_LLR, check_to_variable_messages, variable_index_tensor, iteration):
         """
-        Computes the Variable Node Update in LDPC Decoding using Min-Sum with Residual Connections.
-        """
-        batch_size, num_vars = check_to_variable_messages.shape
-        num_vars_mapped, max_neighbors = variable_index_tensor.shape
-        num_messages = check_to_variable_messages.shape[1]
-
-        valid_mask = variable_index_tensor != -1
-        safe_indices = variable_index_tensor.clone()
-        safe_indices[~valid_mask] = num_messages
-        extended_check_to_variable = torch.cat([
-            check_to_variable_messages,
-            torch.zeros((batch_size, 1), dtype=check_to_variable_messages.dtype, device=check_to_variable_messages.device)
-        ], dim=1)
-
-        check_to_variable_expanded = extended_check_to_variable.unsqueeze(0).expand(num_vars_mapped, -1, -1)
-        index_expanded = safe_indices.unsqueeze(1).expand(-1, batch_size, -1)
-
-        # Gather and sum messages
-        gathered_messages = torch.gather(check_to_variable_expanded, dim=2, index=index_expanded)
-        gathered_messages[~valid_mask.unsqueeze(1).expand(-1, batch_size, -1)] = 0
-        summed_messages = torch.sum(gathered_messages, dim=2).T
-
-        # Compute new variable node messages
-        weighted_LLR = self.w_ch * input_mapping_LLR
-        res_contrib = torch.zeros_like(input_mapping_LLR)
+        Update variable node messages using min-sum algorithm.
         
-        # Add residual connections from previous iterations
-        for t in range(1, min(self.depth_L + 1, iteration + 1)):
-            if len(self.previous_VL_storage) >= t:
-                res_contrib += self.w_res[t - 1] * self.previous_VL_storage[-t]
-
-        Q_new = summed_messages + weighted_LLR + res_contrib
-        self.previous_VL_storage.append(Q_new.clone())
-        return Q_new
+        Args:
+            input_mapping_LLR: LLR values from the channel
+            check_to_variable_messages: Messages from check nodes to variable nodes
+            variable_index_tensor: Tensor mapping messages to variable nodes
+            iteration: Current iteration number
+            
+        Returns:
+            Updated variable-to-check messages
+        """
+        print(f"\n----- Variable Layer Update (Iteration {iteration+1}) -----")
+        print(f"Input LLR shape: {input_mapping_LLR.shape}")
+        print(f"Check-to-variable messages shape: {check_to_variable_messages.shape}")
+        print(f"Variable index tensor shape: {variable_index_tensor.shape}")
+        
+        batch_size = input_mapping_LLR.shape[0]
+        num_messages = variable_index_tensor.shape[0]
+        
+        # Initialize output messages
+        variable_to_check_messages = torch.zeros(batch_size, num_messages, device=input_mapping_LLR.device)
+        
+        # Process each message
+        for msg_idx in range(num_messages):
+            var_idx = variable_index_tensor[msg_idx, 0].item()
+            incoming_msg_indices = variable_index_tensor[msg_idx, 1:].long()
+            
+            # Get channel LLR for this variable
+            channel_llr = input_mapping_LLR[:, var_idx]
+            
+            # Get incoming messages from check nodes (excluding the current message)
+            valid_indices = incoming_msg_indices[incoming_msg_indices >= 0]
+            
+            if len(valid_indices) > 0:
+                incoming_messages = check_to_variable_messages[:, valid_indices]
+                
+                # Sum all incoming messages and channel LLR
+                total_sum = channel_llr.unsqueeze(1) + incoming_messages.sum(dim=1)
+                
+                # For each outgoing message, subtract the corresponding incoming message
+                for i, idx in enumerate(valid_indices):
+                    variable_to_check_messages[:, msg_idx] = total_sum - incoming_messages[:, i]
+            else:
+                # If no incoming messages, just use channel LLR
+                variable_to_check_messages[:, msg_idx] = channel_llr
+        
+        # Apply damping if not the first iteration
+        if iteration > 0:
+            # Damping factor (can be made learnable)
+            alpha = 0.5
+            variable_to_check_messages = alpha * variable_to_check_messages + (1 - alpha) * check_to_variable_messages
+            print(f"Applied damping with factor {alpha}")
+        
+        print(f"Output variable-to-check messages shape: {variable_to_check_messages.shape}")
+        print(f"Variable-to-check messages range: [{variable_to_check_messages.min().item():.4f}, {variable_to_check_messages.max().item():.4f}]")
+        print("----- Completed Variable Layer Update -----\n")
+        
+        return variable_to_check_messages
     
     def forward(self, message_features, message_types, var_to_check_adjacency, check_to_var_adjacency, 
                 input_llr=None, message_to_var_mapping=None, variable_index_tensor=None, iteration=0):
@@ -726,7 +801,7 @@ class CustomVariableMessageGNNDecoder(MessageGNNDecoder):
         Forward pass of the Custom Variable Message GNN Decoder.
         
         Args:
-            input_llr (torch.Tensor): Input LLRs from channel of shape (batch_size, num_variables)
+            input_llr (torch.Tensor): Input LLR values for each variable node
             message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes
             message_types (torch.Tensor, optional): Type indices for each message
             var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for variable-to-check messages
@@ -754,7 +829,8 @@ class CustomVariableMessageGNNDecoder(MessageGNNDecoder):
         message_llrs = torch.matmul(message_to_var_mapping, input_llr.unsqueeze(-1)).squeeze(-1)
         message_llrs = message_llrs.transpose(0, 1)
         
-        # Embed message LLRs
+        # Since we're using a higher hidden_dim, we'll use the input_embedding to transform
+        # the scalar LLRs into higher-dimensional feature vectors
         message_features = self.input_embedding(message_llrs.unsqueeze(-1))
         
         # Clear previous variable layer storage for all GNN layers
@@ -794,6 +870,7 @@ class CustomVariableMessageGNNDecoder(MessageGNNDecoder):
         soft_bits = torch.sigmoid(combined_llrs)
         
         # Compute loss if ground truth is provided
+        loss = None
         if ground_truth is not None:
             loss = F.binary_cross_entropy(soft_bits, ground_truth, reduction='none')
             max_loss = torch.max(loss, dim=1).values
@@ -898,73 +975,73 @@ class CustomCheckMessageGNNLayer(MessageGNNLayer):
         
     def check_layer_update(self, message_features, message_types, check_index_tensor):
         """
-        Compute check node updates using the min-sum algorithm.
+        Update check node messages using min-sum algorithm.
         
         Args:
-            message_features: Tensor of shape (batch_size, num_messages, hidden_dim)
-            message_types: Tensor of shape (num_messages,)
-            check_index_tensor: Tensor of shape (num_checks, max_check_degree)
-                Contains indices of messages connected to each check node.
-                Padded with -1 for variable-length connections.
-                
-        Returns:
-            updated_message_features: Tensor of shape (batch_size, num_messages, hidden_dim)
-        """
-        batch_size, num_messages, hidden_dim = message_features.shape
-        device = message_features.device
-        
-        # Decode message features to LLR values
-        message_llrs = self.decode_messages(message_features)  # (batch_size, num_messages)
-        
-        # Create a mask for valid connections (not -1)
-        valid_mask = (check_index_tensor != -1)  # (num_checks, max_check_degree)
-        
-        # Initialize updated LLRs with zeros
-        updated_llrs = torch.zeros_like(message_llrs)
-        
-        # For each check node
-        for c in range(check_index_tensor.shape[0]):
-            # Get indices of connected messages
-            msg_indices = check_index_tensor[c]
-            valid_indices = msg_indices[valid_mask[c]]
+            message_features: Messages from variable nodes to check nodes
+            message_types: Types of each message for weight sharing
+            check_index_tensor: Tensor mapping messages to check nodes
             
-            if valid_indices.numel() == 0:
-                continue  # Skip if no valid connections
-                
-            # For each connected message
-            for i, msg_idx in enumerate(valid_indices):
-                # Get all other connected messages (excluding the current one)
-                other_indices = torch.cat([valid_indices[:i], valid_indices[i+1:]])
-                
-                if other_indices.numel() == 0:
-                    continue  # Skip if no other connections
-                
-                # Get LLRs of other messages
-                other_llrs = message_llrs[:, other_indices]  # (batch_size, num_other_msgs)
-                
-                # Compute sign and magnitude
-                signs = torch.sign(other_llrs)
-                magnitudes = torch.abs(other_llrs)
-                
-                # Min-sum update: product of signs, minimum of magnitudes
-                prod_signs = torch.prod(signs, dim=1)  # (batch_size,)
-                min_magnitudes = torch.min(magnitudes, dim=1)[0]  # (batch_size,)
-                
-                # Apply scaling factor to improve performance
-                scaled_magnitudes = self.alpha * min_magnitudes
-                
-                # Combine sign and magnitude
-                updated_llrs[:, msg_idx] = prod_signs * scaled_magnitudes
+        Returns:
+            Updated check-to-variable messages
+        """
+        print("\n----- Check Layer Update -----")
+        print(f"Input message features shape: {message_features.shape}")
+        print(f"Check index tensor shape: {check_index_tensor.shape}")
         
-        # Re-encode LLRs to message features
-        # We'll use a simple linear transformation for this
-        updated_message_features = message_features.clone()
+        batch_size = message_features.shape[0]
+        num_messages = check_index_tensor.shape[0]
         
-        # Update only the first dimension of the hidden features with the LLR values
-        # Keep the rest of the dimensions unchanged for compatibility
-        updated_message_features[:, :, 0] = updated_llrs
+        # Initialize output messages
+        check_to_variable_messages = torch.zeros(batch_size, num_messages, device=message_features.device)
         
-        return updated_message_features
+        # Process each message
+        for msg_idx in range(num_messages):
+            check_idx = check_index_tensor[msg_idx, 0].item()
+            incoming_msg_indices = check_index_tensor[msg_idx, 1:].long()
+            
+            # Get incoming messages from variable nodes (excluding the current message)
+            valid_indices = incoming_msg_indices[incoming_msg_indices >= 0]
+            
+            if len(valid_indices) > 0:
+                incoming_messages = message_features[:, valid_indices]
+                
+                # Min-sum algorithm: take the product of signs and minimum of magnitudes
+                signs = torch.sign(incoming_messages)
+                magnitudes = torch.abs(incoming_messages)
+                
+                # Product of signs (using multiplication)
+                prod_sign = torch.prod(signs, dim=1)
+                
+                # Find minimum magnitude
+                min_magnitude = torch.min(magnitudes, dim=1)[0]
+                
+                # For each outgoing message, exclude the corresponding incoming message
+                for i, idx in enumerate(valid_indices):
+                    # Compute sign (excluding current message)
+                    other_signs = torch.cat([signs[:, :i], signs[:, i+1:]], dim=1)
+                    msg_sign = torch.prod(other_signs, dim=1)
+                    
+                    # Compute minimum magnitude (excluding current message)
+                    other_magnitudes = torch.cat([magnitudes[:, :i], magnitudes[:, i+1:]], dim=1)
+                    
+                    if other_magnitudes.shape[1] > 0:
+                        msg_min_magnitude = torch.min(other_magnitudes, dim=1)[0]
+                        
+                        # Combine sign and magnitude
+                        check_to_variable_messages[:, msg_idx] = msg_sign * msg_min_magnitude
+                    else:
+                        # If no other messages, set to zero
+                        check_to_variable_messages[:, msg_idx] = 0.0
+            else:
+                # If no incoming messages, set to zero
+                check_to_variable_messages[:, msg_idx] = 0.0
+        
+        print(f"Output check-to-variable messages shape: {check_to_variable_messages.shape}")
+        print(f"Check-to-variable messages range: [{check_to_variable_messages.min().item():.4f}, {check_to_variable_messages.max().item():.4f}]")
+        print("----- Completed Check Layer Update -----\n")
+        
+        return check_to_variable_messages
     
     def forward(self, message_features, message_types, variable_adjacency, check_adjacency, 
                 variable_index_tensor=None, check_index_tensor=None):
@@ -1065,6 +1142,10 @@ class CustomMinSumMessageGNNDecoder(MessageGNNDecoder):
     def __init__(self, num_messages, num_iterations, hidden_dim, num_message_types=1, depth=2, dropout=0.0):
         super().__init__(num_messages, num_iterations, hidden_dim, num_message_types)
         
+        # Create custom variable and check layers
+        self.variable_layer = CustomVariableMessageGNNLayer(num_message_types, hidden_dim, depth)
+        self.check_layer = CustomCheckMessageGNNLayer(num_message_types, hidden_dim, depth, dropout)
+        
         # Replace GNN layers with custom layers
         self.gnn_layers = nn.ModuleList([
             CustomCheckMessageGNNLayer(num_message_types, hidden_dim, depth, dropout)
@@ -1086,51 +1167,88 @@ class CustomMinSumMessageGNNDecoder(MessageGNNDecoder):
     def forward(self, input_llrs, variable_adjacency, check_adjacency, message_types, 
                 variable_to_message_mapping, ground_truth=None):
         """
-        Forward pass of the decoder.
+        Forward pass of the Custom Min-Sum Message GNN Decoder.
         
         Args:
-            input_llrs: Tensor of shape (batch_size, num_variables)
-            variable_adjacency: Sparse tensor of shape (num_variables, num_messages)
-            check_adjacency: Sparse tensor of shape (num_checks, num_messages)
-            message_types: Tensor of shape (num_messages,)
-            variable_to_message_mapping: Sparse tensor of shape (num_variables, num_messages)
-            ground_truth: Optional tensor of shape (batch_size, num_variables)
+            input_llrs: Input LLR values from the channel
+            variable_adjacency: Adjacency matrix for variable nodes
+            check_adjacency: Adjacency matrix for check nodes
+            message_types: Types of each message for weight sharing
+            variable_to_message_mapping: Mapping from variable nodes to messages
+            ground_truth: Ground truth codeword for training
             
         Returns:
-            soft_bits: Tensor of shape (batch_size, num_variables)
-            loss: Scalar tensor if ground_truth is provided, else None
+            Decoded codeword probabilities and loss (if ground_truth provided)
         """
-        # Map variable node LLRs to message nodes
-        batch_size = input_llrs.shape[0]
-        message_llrs = torch.sparse.mm(variable_to_message_mapping.t(), input_llrs.t()).t()
+        print("\n===== Starting Custom Min-Sum Message GNN Decoder Forward Pass =====")
+        print(f"Input LLRs shape: {input_llrs.shape}")
         
-        # Embed message LLRs
-        message_features = self.input_embedding(message_llrs.unsqueeze(-1))
+        batch_size, num_variables = input_llrs.shape
+        device = input_llrs.device
         
-        # Iteratively update message features through GNN layers
-        for layer in self.gnn_layers:
-            message_features = layer(
-                message_features, 
-                message_types, 
-                variable_adjacency, 
-                check_adjacency,
+        # Initialize messages from variable nodes to check nodes
+        variable_to_check_messages = torch.zeros(batch_size, self.num_messages, device=device)
+        
+        # Initialize messages from check nodes to variable nodes
+        check_to_variable_messages = torch.zeros(batch_size, self.num_messages, device=device)
+        
+        # Iterative decoding
+        for iteration in range(self.num_iterations):
+            print(f"\n----- Iteration {iteration+1}/{self.num_iterations} -----")
+            
+            # Variable node update
+            variable_to_check_messages = self.variable_layer.variable_layer_update(
+                input_llrs, 
+                check_to_variable_messages, 
                 self.variable_index_tensor,
+                iteration
+            )
+            
+            # Check node update
+            check_to_variable_messages = self.check_layer.check_layer_update(
+                variable_to_check_messages,
+                message_types,
                 self.check_index_tensor
             )
         
-        # Aggregate messages to variable nodes
-        soft_bits = self.aggregate_messages_to_variables(
-            message_features, variable_adjacency, input_llrs
-        )
+        # Final decision: combine all messages for each variable node
+        print("\n----- Final Decision Stage -----")
+        
+        # Initialize output probabilities
+        output_llrs = torch.zeros(batch_size, num_variables, device=device)
+        
+        print("Using SUM aggregation for mapping message nodes to variable bits")
+        
+        # For each variable node, sum all incoming messages and the channel LLR
+        for var_idx in range(num_variables):
+            # Get indices of messages connected to this variable
+            msg_indices = variable_to_message_mapping[var_idx]
+            valid_indices = msg_indices[msg_indices >= 0]
+            
+            if len(valid_indices) > 0:
+                # Sum all incoming messages
+                incoming_messages = check_to_variable_messages[:, valid_indices]
+                output_llrs[:, var_idx] = input_llrs[:, var_idx] + torch.sum(incoming_messages, dim=1)
+            else:
+                # If no incoming messages, just use the channel LLR
+                output_llrs[:, var_idx] = input_llrs[:, var_idx]
+        
+        print(f"Output LLRs shape: {output_llrs.shape}")
+        print(f"Output LLRs range: [{output_llrs.min().item():.4f}, {output_llrs.max().item():.4f}]")
+        
+        # Convert LLRs to probabilities
+        output_probs = torch.sigmoid(output_llrs)
+        
+        print(f"Output probabilities shape: {output_probs.shape}")
+        print(f"Output probabilities range: [{output_probs.min().item():.4f}, {output_probs.max().item():.4f}]")
+        print("===== Completed Custom Min-Sum Message GNN Decoder Forward Pass =====\n")
         
         # Compute loss if ground truth is provided
-        loss = None
         if ground_truth is not None:
-            loss = F.binary_cross_entropy_with_logits(
-                soft_bits, ground_truth, reduction='mean'
-            )
+            loss = F.binary_cross_entropy(output_probs, ground_truth.float())
+            return output_probs, loss
         
-        return soft_bits, loss
+        return output_probs
 
 
 def create_custom_minsum_message_gnn_decoder(H, num_iterations=5, hidden_dim=8, depth=2, dropout=0.0):

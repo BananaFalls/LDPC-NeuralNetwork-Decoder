@@ -30,15 +30,40 @@ This project implements a Message-Centered Graph Neural Network (GNN) LDPC decod
 - Integration with the existing GNN architecture
 
 ## Next Steps
-1. Complete the implementation of the custom check layer using min-sum algorithm
-2. Create a new decoder class that uses both custom variable and check layers
-3. Create helper functions to easily instantiate the custom decoder
-4. Update example scripts to demonstrate the use of the fully custom decoder
-5. Evaluate performance compared to neural and traditional approaches
-6. Evaluate the performance of the custom min-sum decoder against neural network-based decoders
-7. Experiment with different scaling factors for the min-sum algorithm
-8. Implement more advanced decoding algorithms (e.g., normalized min-sum, offset min-sum)
-9. Create a comprehensive comparison of different decoding approaches
+1. Create helper functions to easily instantiate the custom decoder
+   - Develop a factory function that configures the custom decoder with appropriate parameters
+   - Implement utility functions for creating PCM matrices and index tensors
+   - Add documentation for each helper function with usage examples
+
+2. Update example scripts to demonstrate the use of the fully custom decoder
+   - Create a comprehensive example script showing the full pipeline from encoding to decoding
+   - Add visualization tools to display decoding performance metrics
+   - Include examples with different code rates and block lengths
+
+3. Evaluate performance compared to our custom approach and traditional approaches
+   - Implement BER (Bit Error Rate) vs SNR performance evaluation
+   - Implement FER (Frame Error Rate) vs SNR performance evaluation
+   - Compare with traditional belief propagation, scaled min-sum algorithms
+   - Analyse convergence speed and computational complexity
+   - Test performance under different channel conditions
+
+4. Create a comprehensive comparison of different decoding approaches
+   - Compare neural network-based approaches with traditional algorithms
+   - Analyse trade-offs between performance (BER or FER) vs training complexity
+   - Document findings in a structured report with visualizations
+   - Identify scenarios where each approach performs best
+
+5. Optimize the implementation for better computational efficiency
+   - Identify and eliminate bottlenecks in the current implementation
+   - Implement parallel processing where applicable
+   - Optimize memory usage for handling larger code blocks
+   - Consider hardware-specific optimizations for deployment
+
+6. Develop an easy way to debug the decoder.
+   - Create a configuration system for easy parameter tuning
+   - Implement a command-line interface for batch processing
+   - Add logging and visualization capabilities for debugging and analysis
+   - Add print statements to see the changes of each stage 
 
 ## Project Structure
 - `models/message_gnn_decoder.py`: Contains the main implementation of the Message GNN decoder

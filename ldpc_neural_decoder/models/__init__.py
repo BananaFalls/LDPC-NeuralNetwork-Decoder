@@ -2,17 +2,19 @@
 Neural network models for LDPC decoding.
 """
 
-from ldpc_neural_decoder.models.decoder import LDPCNeuralDecoder, TiedNeuralLDPCDecoder
+# Remove the import that's causing the error
+# from ldpc_neural_decoder.models.decoder import LDPCNeuralDecoder, TiedNeuralLDPCDecoder
 from ldpc_neural_decoder.models.layers import CheckLayer, VariableLayer, ResidualLayer, OutputLayer
 from ldpc_neural_decoder.models.traditional_decoders import BeliefPropagationDecoder, MinSumScaledDecoder
-from ldpc_neural_decoder.models.gnn_ldpc_decoder import (
-    GNNLDPCDecoder, 
-    BaseGraphGNNDecoder,
-    GNNCheckLayer,
-    GNNVariableLayer,
-    GNNResidualLayer,
-    GNNOutputLayer
-)
+# Remove the import for the missing gnn_ldpc_decoder.py file
+# from ldpc_neural_decoder.models.gnn_ldpc_decoder import (
+#     GNNLDPCDecoder, 
+#     BaseGraphGNNDecoder,
+#     GNNCheckLayer,
+#     GNNVariableLayer,
+#     GNNResidualLayer,
+#     GNNOutputLayer
+# )
 from ldpc_neural_decoder.models.message_gnn_decoder import (
     MessageGNNLayer,
     MessageGNNDecoder,
@@ -28,20 +30,22 @@ from ldpc_neural_decoder.models.message_gnn_decoder import (
 )
 
 __all__ = [
-    'LDPCNeuralDecoder',
-    'TiedNeuralLDPCDecoder',
+    # Remove the missing classes
+    # 'LDPCNeuralDecoder',
+    # 'TiedNeuralLDPCDecoder',
     'CheckLayer',
     'VariableLayer',
     'ResidualLayer',
     'OutputLayer',
     'BeliefPropagationDecoder',
     'MinSumScaledDecoder',
-    'GNNLDPCDecoder',
-    'BaseGraphGNNDecoder',
-    'GNNCheckLayer',
-    'GNNVariableLayer',
-    'GNNResidualLayer',
-    'GNNOutputLayer',
+    # Remove the missing classes
+    # 'GNNLDPCDecoder',
+    # 'BaseGraphGNNDecoder',
+    # 'GNNCheckLayer',
+    # 'GNNVariableLayer',
+    # 'GNNResidualLayer',
+    # 'GNNOutputLayer',
     'MessageGNNDecoder',
     'MessageGNNLayer',
     'TannerToMessageGraph',
