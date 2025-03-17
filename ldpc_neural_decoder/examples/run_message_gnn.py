@@ -283,7 +283,7 @@ def main():
     with torch.no_grad():
         # Run enhanced Message GNN decoder
         decoder_output = decoder(
-            input_llr=noisy_llrs_tensor.unsqueeze(0),
+            input_llr=noisy_llrs_tensor,
             message_to_var_mapping=message_to_var_mapping,
             message_types=message_types,
             var_to_check_adjacency=var_to_check_adjacency,
@@ -291,7 +291,7 @@ def main():
         )
         
         # Extract probabilities and convert to bits
-        decoded_probs = decoder_output.squeeze(0)
+        decoded_probs = decoder_output
         decoded_bits = (decoded_probs > 0.5).float().numpy()
     
     # Run "standard" decoder (simplified for this demo)
@@ -301,14 +301,25 @@ def main():
     ber_gnn = np.mean(np.abs(decoded_bits - codewords))
     ber_standard = np.mean(np.abs(standard_decoded_bits - codewords))
     
-    print(f"\nBit Error Rate (Enhanced GNN Decoder): {ber_gnn:.4f}")
+    # Calculate frame error rates (probability of at least one error in a codeword)
+    frame_errors_gnn = np.any(decoded_bits != codewords, axis=1)
+    frame_errors_standard = np.any(standard_decoded_bits != codewords, axis=1)
+    fer_gnn = np.mean(frame_errors_gnn)
+    fer_standard = np.mean(frame_errors_standard)
+    
+    print(f"\nPerformance Metrics:")
+    print(f"Bit Error Rate (Enhanced GNN Decoder): {ber_gnn:.4f}")
     print(f"Bit Error Rate (Standard Decoder): {ber_standard:.4f}")
+    print(f"Frame Error Rate (Enhanced GNN Decoder): {fer_gnn:.4f}")
+    print(f"Frame Error Rate (Standard Decoder): {fer_standard:.4f}")
     
     # Display sample results for the first codeword
     print("\n----- Sample Results (First Codeword) -----")
     print(f"Original:       {codewords[0][:20]}")
     print(f"Decoded (GNN):  {decoded_bits[0][:20]}")
     print(f"Decoded (Std):  {standard_decoded_bits[0][:20]}")
+    print(f"Frame Status (GNN): {'Error' if frame_errors_gnn[0] else 'Correct'}")
+    print(f"Frame Status (Std): {'Error' if frame_errors_standard[0] else 'Correct'}")
     
     print("\n===== Demo Completed =====")
 

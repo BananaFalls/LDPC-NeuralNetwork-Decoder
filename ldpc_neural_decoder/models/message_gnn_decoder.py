@@ -248,13 +248,14 @@ class MessageGNNDecoder(nn.Module):
     The graph structure is defined by the Tanner graph of the LDPC code.
     """
     
-    def __init__(self, num_messages, num_iterations=5, hidden_dim=64, num_message_types=1):
+    def __init__(self, num_messages, num_iterations=5, hidden_dim=64, num_message_types=1, num_of_residual_layers=2):
         super().__init__()
         
         self.num_messages = num_messages
         self.num_iterations = num_iterations
         self.hidden_dim = hidden_dim
         self.num_message_types = num_message_types
+        self.num_of_residual_layers = num_of_residual_layers
         
         # Input embedding layer
         self.input_embedding = nn.Linear(1, hidden_dim)
@@ -271,9 +272,6 @@ class MessageGNNDecoder(nn.Module):
             for _ in range(num_iterations)
         ])
         
-        # Output projection to get final message values
-        self.output_projection = nn.Linear(hidden_dim, 1)
-        
         # Layer normalization for stabilizing training
         self.var_layer_norms = nn.ModuleList([
             nn.LayerNorm(hidden_dim)
@@ -284,168 +282,147 @@ class MessageGNNDecoder(nn.Module):
             nn.LayerNorm(hidden_dim)
             for _ in range(num_iterations)
         ])
+        
+        # Final projection to scalar LLR (non-trainable)
+        self.output_projection = nn.Linear(hidden_dim, 1, bias=False)
+        # Initialize to average over hidden dimensions
+        with torch.no_grad():
+            self.output_projection.weight.fill_(1.0 / hidden_dim)
+        # Freeze the output projection
+        self.output_projection.weight.requires_grad = False
     
+    def output_mapping(self, final_messages, message_to_var_mapping, input_llr, batch_size, num_vars):
+        """
+        Maps final messages back to variable nodes and combines them with input LLRs.
+        This is a parameter-free output layer that:
+        1. Projects high-dimensional messages back to scalar LLRs
+        2. Combines messages that share the same variable node
+        3. Adds the original input LLR from QPSK demodulation
+        4. Applies sigmoid to get soft bit values
+        
+        Args:
+            final_messages: Tensor of shape [batch_size, num_messages, hidden_dim]
+            message_to_var_mapping: Mapping from messages to variable nodes
+            input_llr: Original input LLRs from QPSK demodulation
+            batch_size: Number of codewords in batch
+            num_vars: Number of variable nodes
+            
+        Returns:
+            Tensor of shape [batch_size, num_vars] containing probabilities for each bit
+        """
+        # Project messages to scalar LLRs (parameter-free)
+        message_llrs = self.output_projection(final_messages).squeeze(-1)
+        
+        # Initialize output probabilities
+        output_probs = torch.zeros(batch_size, num_vars, device=input_llr.device)
+        
+        # Combine messages for each variable node
+        for b in range(batch_size):
+            # Initialize LLRs for each variable node
+            var_llrs = torch.zeros(num_vars, device=input_llr.device)
+            
+            # Sum messages going to each variable node
+            for msg_idx in range(self.num_messages):
+                var_idx = message_to_var_mapping[msg_idx, 0].item() if len(message_to_var_mapping.shape) > 1 else message_to_var_mapping[msg_idx].item()
+                var_llrs[var_idx] += message_llrs[b, msg_idx]
+            
+            # Add original input LLRs (log domain addition = probability domain multiplication)
+            combined_llrs = var_llrs + input_llr[b]
+            
+            # Convert to probabilities using sigmoid
+            output_probs[b] = torch.sigmoid(combined_llrs)
+        
+        return output_probs
+
     def forward(self, input_llr, message_to_var_mapping, message_types=None, 
                 var_to_check_adjacency=None, check_to_var_adjacency=None, ground_truth=None):
         """
         Forward pass of the Message GNN Decoder with alternating layers.
-        
-        Args:
-            input_llr (torch.Tensor): Input LLR values for each variable node
-            message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes
-            message_types (torch.Tensor, optional): Types of each message for weight sharing
-            var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for var-to-check messages
-            check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-var messages
-            ground_truth (torch.Tensor, optional): Ground truth codeword for training
-            
-        Returns:
-            torch.Tensor: Decoded codeword probabilities
+        Uses residual connections in variable layers by combining:
+        1. check-to-var messages from previous check layer
+        2. previous var-to-check messages from the queue
         """
-        print("\n===== Starting Message GNN Decoder Forward Pass =====")
         print(f"Input LLR shape: {input_llr.shape}")
-        print(f"Message to var mapping shape: {message_to_var_mapping.shape}")
+        batch_size = input_llr.shape[1]
+        num_vars = input_llr.shape[2]
         
-        batch_size = input_llr.shape[0]
-        num_vars = input_llr.shape[1]
-        
-        # Initialize message features directly from input LLRs
+        # Initialize message features from input LLRs
         message_llrs = torch.zeros(batch_size, self.num_messages, device=input_llr.device)
         
-        # Map input LLRs to messages directly
+        # Map input LLRs to messages
         for b in range(batch_size):
-            # Check if message_to_var_mapping is 2D
-            if len(message_to_var_mapping.shape) > 1:
-                # If it's 2D, we need to extract just the first column
-                var_indices = message_to_var_mapping[:, 0]
-            else:
-                # If it's already 1D, use it directly
-                var_indices = message_to_var_mapping
-            
-            # Copy the LLR values directly from variable nodes to message nodes
+            var_indices = message_to_var_mapping[:, 0] if len(message_to_var_mapping.shape) > 1 else message_to_var_mapping[b]
             message_llrs[b] = input_llr[b][var_indices]
         
-        print(f"Initialized message LLRs shape: {message_llrs.shape}")
-        
-        # Transform scalar LLRs into higher-dimensional feature vectors
+        # Transform scalar LLRs into feature vectors
         var_message_features = self.input_embedding(message_llrs.unsqueeze(-1))
         check_message_features = torch.zeros_like(var_message_features)
         
-        print(f"Initial var message features shape: {var_message_features.shape}")
-        print(f"Initial check message features shape: {check_message_features.shape}")
-        
-        # If message types not provided, use default (all same type)
+        # Default message types if not provided
         if message_types is None:
             message_types = torch.zeros(self.num_messages, dtype=torch.long, device=input_llr.device)
         
-        # If adjacency matrices not provided, create dummy ones
+        # Default adjacency matrices if not provided
         if var_to_check_adjacency is None:
             var_to_check_adjacency = torch.eye(self.num_messages, device=input_llr.device)
-        
         if check_to_var_adjacency is None:
             check_to_var_adjacency = torch.eye(self.num_messages, device=input_llr.device)
         
-        # Store all intermediate message features for deep residual connections
-        all_var_features = [var_message_features]
-        all_check_features = [check_message_features]
+        # Queue to store previous var-to-check messages
+        var_to_check_queue = []
         
-        # Iterative GNN decoding with alternating layers
+        # Iterative message passing
         for i in range(self.num_iterations):
             print(f"\n----- Iteration {i+1}/{self.num_iterations} -----")
             
-            # 1. Variable-side update
+            # 1. Variable-to-Check Update
+            # Combine:
+            # a) check-to-var messages from previous check layer
+            # b) previous var-to-check messages from queue if available
             var_input = var_message_features
-            check_input = check_message_features
             
             # Apply variable GNN layer
             updated_var_features = self.var_gnn_layers[i](
-                var_input, 
-                check_input,
-                message_types, 
+                var_input,
+                check_message_features,  # check-to-var messages from previous check layer
+                message_types,
                 var_to_check_adjacency
             )
             
-            # Apply residual connection and layer normalization
-            var_message_features = self.var_layer_norms[i](updated_var_features + var_input)
+            # Add residual connections from previous var-to-check messages
+            if i >= self.num_of_residual_layers and var_to_check_queue:
+                for prev_var_to_check in var_to_check_queue:
+                    updated_var_features = updated_var_features + prev_var_to_check
+                print(f"Added residual connections from {len(var_to_check_queue)} previous var-to-check messages")
             
-            # Store for deep residual connection
-            all_var_features.append(var_message_features)
+            # Apply layer norm
+            var_message_features = self.var_layer_norms[i](updated_var_features)
             
-            print(f"Updated var message features shape: {var_message_features.shape}")
+            # Update queue with current var-to-check messages
+            var_to_check_queue.append(var_message_features.clone())
+            if len(var_to_check_queue) > self.num_of_residual_layers:
+                var_to_check_queue.pop(0)
             
-            # 2. Check-side update
-            var_input = var_message_features  # Use the updated var features
-            
-            # Apply check GNN layer
+            # 2. Check-to-Variable Update
+            # Apply check GNN layer using updated var-to-check messages
             updated_check_features = self.check_gnn_layers[i](
-                check_input,
-                var_input,
-                message_types, 
+                check_message_features,
+                var_message_features,  # using the updated var-to-check messages
+                message_types,
                 check_to_var_adjacency
             )
             
-            # Apply residual connection and layer normalization
-            check_message_features = self.check_layer_norms[i](updated_check_features + check_input)
-            
-            # Store for deep residual connection
-            all_check_features.append(check_message_features)
-            
-            print(f"Updated check message features shape: {check_message_features.shape}")
-            
-            # Apply deep residual connections every 2 iterations starting from iteration 3
-            if i >= 2 and i % 2 == 0:
-                # Connect to features from 2 iterations ago
-                prev_idx = len(all_var_features) - 3
-                if prev_idx >= 0:
-                    var_message_features = var_message_features + all_var_features[prev_idx]
-                    check_message_features = check_message_features + all_check_features[prev_idx]
-                    print("Applied deep residual connection")
+            # Apply layer norm
+            check_message_features = self.check_layer_norms[i](updated_check_features)
         
-        # Final decoding stage
-        print("\n----- Final Decoding Stage -----")
-        
-        # Use both variable-side and check-side features for final output
-        final_features = var_message_features + check_message_features
-        
-        # Decode final message features to LLR values
-        decoded_llrs = self.output_projection(final_features).squeeze(-1)
-        print(f"Output LLRs shape: {decoded_llrs.shape}")
-        print(f"Output LLRs range: [{decoded_llrs.min().item():.4f}, {decoded_llrs.max().item():.4f}]")
-        
-        # Aggregate messages for each variable node
-        output_probs = torch.zeros(batch_size, num_vars, device=input_llr.device)
-        
-        print("Using SUM aggregation for mapping message nodes to variable bits")
-        
-        for b in range(batch_size):
-            # Initialize tensor to store sum of messages for each variable node
-            var_llrs = torch.zeros(num_vars, device=input_llr.device)
-            
-            # Count number of messages per variable node for potential normalization
-            message_counts = torch.zeros(num_vars, device=input_llr.device)
-            
-            # Sum all messages going to each variable node
-            for msg_idx in range(self.num_messages):
-                # Get the variable index for this message
-                if len(message_to_var_mapping.shape) > 1:
-                    # If message_to_var_mapping is 2D, get the first column
-                    var_idx = message_to_var_mapping[msg_idx, 0].item()
-                else:
-                    # If it's 1D, use it directly
-                    var_idx = message_to_var_mapping[msg_idx].item()
-                
-                var_llrs[var_idx] += decoded_llrs[b, msg_idx]
-                message_counts[var_idx] += 1
-            
-            # Add input LLRs to the summed messages
-            combined_llrs = var_llrs + input_llr[b]
-            
-            # Convert to probabilities
-            output_probs[b] = torch.sigmoid(combined_llrs)
-        
-        print(f"Final output probabilities range: [{output_probs.min().item():.4f}, {output_probs.max().item():.4f}]")
-        print("===== Completed Message GNN Decoder Forward Pass =====")
-        
-        return output_probs
+        # Final decoding using parameter-free output mapping
+        return self.output_mapping(
+            final_messages=check_message_features,
+            message_to_var_mapping=message_to_var_mapping,
+            input_llr=input_llr,
+            batch_size=batch_size,
+            num_vars=num_vars
+        )
     
     def decode(self, input_llr, message_to_var_mapping, message_types=None,
               var_to_check_adjacency=None, check_to_var_adjacency=None):
@@ -639,7 +616,7 @@ class TannerToMessageGraph:
         return torch.tensor(all_indices, dtype=torch.long), torch.tensor(offsets, dtype=torch.long)
 
 
-def create_message_gnn_decoder(H, base_graph=None, lifting_factor=None, num_iterations=5, hidden_dim=64):
+def create_message_gnn_decoder(H, base_graph=None, lifting_factor=None, num_iterations=5, hidden_dim=64, num_of_residual_layers=2):
     """
     Create a Message GNN Decoder based on a parity-check matrix and optionally a base graph.
     
@@ -649,6 +626,7 @@ def create_message_gnn_decoder(H, base_graph=None, lifting_factor=None, num_iter
         lifting_factor (int, optional): Lifting factor used to create H from base_graph
         num_iterations (int, optional): Number of decoding iterations
         hidden_dim (int, optional): Hidden dimension for message features
+        num_of_residual_layers (int, optional): Number of previous layers to use for residual connections
         
     Returns:
         MessageGNNDecoder: The decoder model
@@ -687,11 +665,13 @@ def create_message_gnn_decoder(H, base_graph=None, lifting_factor=None, num_iter
         num_messages=num_messages,
         num_iterations=num_iterations,
         hidden_dim=hidden_dim,
-        num_message_types=num_message_types
+        num_message_types=num_message_types,
+        num_of_residual_layers=num_of_residual_layers
     )
     
     print(f"Created Message GNN Decoder with {num_iterations} iterations and {hidden_dim} hidden dimensions")
     print(f"Using weight sharing with {num_message_types} different message types based on the base graph")
+    print(f"Using {num_of_residual_layers} previous layers for residual connections")
     
     return decoder, converter
 
