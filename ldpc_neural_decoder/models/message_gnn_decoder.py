@@ -342,10 +342,17 @@ class MessageGNNDecoder(nn.Module):
         1. check-to-var messages from previous check layer
         2. previous var-to-check messages from the queue
         """
+        print("\n===== Input LLR Information =====")
         print(f"Input LLR shape: {input_llr.shape}")
-        batch_size = input_llr.shape[1]
-        num_vars = input_llr.shape[2]
+        print("===============================\n")
         
+        # Validate input shape
+        if len(input_llr.shape) != 2:
+            raise ValueError(f"Expected input_llr to be a 2D tensor (batch_size × num_vars), got shape {input_llr.shape}")
+        
+        batch_size = input_llr.shape[0]
+        num_vars = input_llr.shape[1]
+
         # Initialize message features from input LLRs
         message_llrs = torch.zeros(batch_size, self.num_messages, device=input_llr.device)
         
