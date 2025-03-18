@@ -111,16 +111,19 @@ def generate_zero_codewords(n, num_codewords):
     """
     return np.zeros((num_codewords, n), dtype=int)
 
-def add_noise_qpsk(codewords, snr_db):
+def add_noise_qpsk(codewords, snr_db=None, min_snr=0.0, max_snr=10.0, variable_snr=False):
     """
     Add AWGN noise to QPSK-modulated codewords.
     
     Args:
         codewords (np.ndarray): Binary codewords
-        snr_db (float): Signal-to-noise ratio in dB
+        snr_db (float, optional): Fixed SNR value in dB (used if variable_snr=False)
+        min_snr (float): Minimum SNR value in dB (used if variable_snr=True)
+        max_snr (float): Maximum SNR value in dB (used if variable_snr=True)
+        variable_snr (bool): Whether to use variable SNR values for each codeword
         
     Returns:
-        tuple: (noisy_llrs, symbols, noise)
+        tuple: (noisy_llrs, symbols, noise, snr_values)
     """
     # Convert bits to QPSK symbols (using Gray coding)
     num_codewords, n = codewords.shape
@@ -140,19 +143,32 @@ def add_noise_qpsk(codewords, snr_db):
             else:  # [1, 1]
                 symbols[i, j] = (-1 - 1j) / np.sqrt(2)  # Third quadrant
     
-    # Calculate noise standard deviation based on SNR
-    snr_linear = 10**(snr_db/10)
-    noise_std = 1 / np.sqrt(2 * snr_linear)
+    # Generate SNR values for each codeword
+    if variable_snr:
+        print(f"Using variable SNR values within range [{min_snr:.1f}, {max_snr:.1f}] dB")
+        snr_values = np.random.uniform(min_snr, max_snr, size=num_codewords)
+    else:
+        if snr_db is None:
+            snr_db = 5.0  # Default value
+        print(f"Using fixed SNR value: {snr_db} dB")
+        snr_values = np.ones(num_codewords) * snr_db
     
-    # Add complex Gaussian noise
-    noise = noise_std * (np.random.randn(*symbols.shape) + 1j * np.random.randn(*symbols.shape))
-    received_symbols = symbols + noise
-    
-    # Calculate LLRs for each bit
+    # Initialize arrays for noise and received symbols
+    noise = np.zeros_like(symbols, dtype=complex)
+    received_symbols = np.zeros_like(symbols, dtype=complex)
     noisy_llrs = np.zeros_like(codewords, dtype=float)
     
-    # LLR calculation for QPSK
+    # Apply noise with different SNR for each codeword
     for i in range(num_codewords):
+        # Calculate noise standard deviation based on SNR for this codeword
+        snr_linear = 10**(snr_values[i]/10)
+        noise_std = 1 / np.sqrt(2 * snr_linear)
+        
+        # Add complex Gaussian noise to this codeword
+        noise[i] = noise_std * (np.random.randn(symbols.shape[1]) + 1j * np.random.randn(symbols.shape[1]))
+        received_symbols[i] = symbols[i] + noise[i]
+        
+        # Calculate LLRs for each bit in this codeword
         for j in range(bits_reshaped.shape[1]):
             # First bit LLR
             noisy_llrs[i, j*2] = -2 * np.sqrt(2) * np.real(received_symbols[i, j]) / (noise_std**2)
@@ -171,12 +187,12 @@ def add_noise_qpsk(codewords, snr_db):
     
     plt.grid(True, alpha=0.3)
     plt.legend()
-    plt.title(f'QPSK Constellation (SNR = {snr_db} dB)')
+    plt.title(f'QPSK Constellation (SNR = {snr_values[0]:.1f} dB)')
     plt.xlabel('In-phase')
     plt.ylabel('Quadrature')
     plt.savefig('qpsk_constellation.png')
     
-    return noisy_llrs, symbols, noise
+    return noisy_llrs, symbols, noise, snr_values
 
 def plot_ber_comparison(snr_values, ber_standard, ber_custom):
     """
@@ -269,13 +285,22 @@ def main():
     
     print(f"Generated {num_codewords} zero codewords")
     
-    # Add noise using QPSK modulation
+    # Add noise using QPSK modulation with variable SNR values
     print("\n----- Adding Noise (QPSK Modulation) -----")
-    snr_db = 5.0
-    noisy_llrs, symbols, noise = add_noise_qpsk(codewords, snr_db)
+    
+    # SNR range where FER is between 10^-1 and 10^-8 for increased observation range
+    min_snr = 0.0   # Lower SNR for FER ~10^-1
+    max_snr = 10.0  # Higher SNR for FER ~10^-8
+    
+    noisy_llrs, symbols, noise, snr_values = add_noise_qpsk(
+        codewords, 
+        variable_snr=True,
+        min_snr=min_snr,
+        max_snr=max_snr
+    )
     noisy_llrs_tensor = torch.from_numpy(noisy_llrs).float()
     
-    print(f"Added noise at SNR = {snr_db} dB")
+    print(f"Added noise with variable SNR values: min={snr_values.min():.2f} dB, max={snr_values.max():.2f} dB")
     print(f"LLR values range: [{noisy_llrs.min():.4f}, {noisy_llrs.max():.4f}]")
     
     # Run decoders
@@ -297,9 +322,12 @@ def main():
     # Run "standard" decoder (simplified for this demo)
     standard_decoded_bits = (noisy_llrs < 0).astype(float)
     
-    # Calculate bit error rates
-    ber_gnn = np.mean(np.abs(decoded_bits - codewords))
-    ber_standard = np.mean(np.abs(standard_decoded_bits - codewords))
+    # Calculate bit error rates per codeword and overall
+    ber_per_codeword_gnn = np.mean(np.abs(decoded_bits - codewords), axis=1)
+    ber_per_codeword_standard = np.mean(np.abs(standard_decoded_bits - codewords), axis=1)
+    
+    ber_gnn = np.mean(ber_per_codeword_gnn)
+    ber_standard = np.mean(ber_per_codeword_standard)
     
     # Calculate frame error rates (probability of at least one error in a codeword)
     frame_errors_gnn = np.any(decoded_bits != codewords, axis=1)
@@ -313,15 +341,35 @@ def main():
     print(f"Frame Error Rate (Enhanced GNN Decoder): {fer_gnn:.4f}")
     print(f"Frame Error Rate (Standard Decoder): {fer_standard:.4f}")
     
+    # Print per-codeword results with SNRs to see correlation
+    print("\n----- Per-Codeword Results -----")
+    print(f"{'SNR (dB)':10s} | {'BER (GNN)':10s} | {'BER (Std)':10s} | {'GNN Status':10s} | {'Std Status':10s}")
+    print("-" * 65)
+    
+    for i in range(num_codewords):
+        gnn_status = "Error" if frame_errors_gnn[i] else "Correct"
+        std_status = "Error" if frame_errors_standard[i] else "Correct"
+        print(f"{snr_values[i]:10.2f} | {ber_per_codeword_gnn[i]:10.4f} | {ber_per_codeword_standard[i]:10.4f} | {gnn_status:10s} | {std_status:10s}")
+    
     # Display sample results for the first codeword
     print("\n----- Sample Results (First Codeword) -----")
     print(f"Original:       {codewords[0][:20]}")
     print(f"Decoded (GNN):  {decoded_bits[0][:20]}")
     print(f"Decoded (Std):  {standard_decoded_bits[0][:20]}")
+    print(f"SNR: {snr_values[0]:.2f} dB")
     print(f"Frame Status (GNN): {'Error' if frame_errors_gnn[0] else 'Correct'}")
     print(f"Frame Status (Std): {'Error' if frame_errors_standard[0] else 'Correct'}")
     
     print("\n===== Demo Completed =====")
+    
+    # Return results for further analysis if needed
+    return {
+        'snr_values': snr_values,
+        'ber_gnn': ber_per_codeword_gnn,
+        'ber_standard': ber_per_codeword_standard,
+        'frame_errors_gnn': frame_errors_gnn,
+        'frame_errors_standard': frame_errors_standard
+    }
 
 if __name__ == "__main__":
     main() 

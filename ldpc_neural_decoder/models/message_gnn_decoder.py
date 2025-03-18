@@ -290,7 +290,19 @@ class MessageGNNDecoder(nn.Module):
             self.output_projection.weight.fill_(1.0 / hidden_dim)
         # Freeze the output projection
         self.output_projection.weight.requires_grad = False
+        
+        print(f"\nModel Configuration:")
+        print(f"Number of messages: {num_messages}")
+        print(f"Number of iterations: {num_iterations}")
+        print(f"Hidden dimension: {hidden_dim}")
+        print(f"Number of message types: {num_message_types}")
+        print(f"Number of residual layers: {num_of_residual_layers}")
+        print(f"Total trainable parameters: {self.count_parameters():,}")
     
+    def count_parameters(self):
+        """Count the number of trainable parameters in the model."""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
     def output_mapping(self, final_messages, message_to_var_mapping, input_llr, batch_size, num_vars):
         """
         Maps final messages back to variable nodes and combines them with input LLRs.

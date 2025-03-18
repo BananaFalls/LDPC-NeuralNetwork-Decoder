@@ -15,7 +15,8 @@ from ldpc_neural_decoder.utils.channel import (
     qpsk_modulate,
     awgn_channel,
     qpsk_demodulate,
-    compute_ber_fer
+    compute_ber_fer,
+    generate_variable_snr_values
 )
 
 class LDPCDecoderTrainer:
@@ -53,7 +54,7 @@ class LDPCDecoderTrainer:
             learning_rate (float): Learning rate
             check_index_tensor (torch.Tensor): Check node index mapping
             var_index_tensor (torch.Tensor): Variable node index mapping
-            snr_range (list, optional): Range of SNR values to train on
+            snr_range (list, optional): Range of SNR values to train on [min_snr, max_snr]
             variable_bit_length (int, optional): Length of variable bits
             validation_interval (int): Interval for validation
             momentum (float): Momentum factor for SGD optimizer
@@ -71,55 +72,84 @@ class LDPCDecoderTrainer:
         
         # Set up SNR range if not provided
         if snr_range is None:
-            snr_range = [-2, 0, 2, 4]
+            # Default range covering FER from 10^-1 to 10^-8 (extended range)
+            snr_range = [0.0, 12.0]
+        
+        print(f"Training with SNR values varying randomly between {snr_range[0]} and {snr_range[1]} dB")
+        print(f"Using SGD optimizer with lr={learning_rate}, momentum={momentum}, weight_decay={weight_decay}")
         
         # Training loop
         for epoch in range(num_epochs):
             self.decoder.train()
             epoch_loss = 0.0
+            epoch_ber = 0.0
+            epoch_fer = 0.0
             num_batches = 0
             
-            # Train on different SNR values
-            for snr_db in snr_range:
-                # Generate random bits
-                transmitted_bits = torch.randint(0, 2, (batch_size, variable_bit_length), 
-                                               device=self.device).float()
-                
-                # Modulate using QPSK
-                qpsk_symbols = qpsk_modulate(transmitted_bits.view(batch_size, -1))
-                
-                # Pass through AWGN channel
-                received_signal = awgn_channel(qpsk_symbols, snr_db)
-                
-                # Demodulate to LLRs
-                llrs = qpsk_demodulate(received_signal, snr_db)
-                llrs = llrs.view(batch_size, -1)
-                
-                # Zero gradients
-                optimizer.zero_grad()
-                
-                # Forward pass
-                _, loss = self.decoder(llrs, check_index_tensor, var_index_tensor, transmitted_bits)
-                
-                # Compute mean loss
-                batch_loss = loss.mean()
-                
-                # Backward pass
-                batch_loss.backward()
-                
-                # Update parameters
-                optimizer.step()
-                
-                # Accumulate loss
-                epoch_loss += batch_loss.item()
-                num_batches += 1
+            # Generate random SNR values for each sample in the batch
+            snr_values = generate_variable_snr_values(
+                batch_size=batch_size, 
+                min_snr=snr_range[0], 
+                max_snr=snr_range[1]
+            ).to(self.device)
             
-            # Compute average loss for the epoch
+            # Generate zero codewords (as per paper's recommendation)
+            transmitted_bits = torch.zeros((batch_size, variable_bit_length), 
+                                         device=self.device).float()
+            
+            # Generate modulated symbols (using BPSK for simplicity: 0->+1, 1->-1)
+            modulated_symbols = 1.0 - 2.0 * transmitted_bits
+            
+            # Add noise with different SNR for each sample
+            noisy_symbols = torch.zeros_like(modulated_symbols)
+            llrs = torch.zeros_like(modulated_symbols)
+            
+            for i in range(batch_size):
+                # Calculate noise standard deviation for this sample
+                snr_linear = 10 ** (snr_values[i].item() / 10)
+                noise_std = 1.0 / np.sqrt(snr_linear)
+                
+                # Add Gaussian noise
+                noise = torch.randn_like(modulated_symbols[i]) * noise_std
+                noisy_symbols[i] = modulated_symbols[i] + noise
+                
+                # Convert to LLRs: LLR = 2*r/sigma^2 where r is the received signal
+                llrs[i] = 2.0 * noisy_symbols[i] / (noise_std ** 2)
+            
+            # Zero gradients
+            optimizer.zero_grad()
+            
+            # Forward pass
+            soft_bits, loss = self.decoder(llrs, check_index_tensor, var_index_tensor, transmitted_bits)
+            
+            # Compute mean loss
+            batch_loss = loss.mean()
+            
+            # Backward pass
+            batch_loss.backward()
+            
+            # Update parameters
+            optimizer.step()
+            
+            # Calculate BER and FER metrics
+            hard_bits = (soft_bits > 0.5).float()
+            ber, fer = compute_ber_fer(transmitted_bits, hard_bits)
+            
+            # Accumulate loss and metrics
+            epoch_loss += batch_loss.item()
+            epoch_ber += ber
+            epoch_fer += fer
+            num_batches += 1
+            
+            # Compute average metrics for the epoch
             avg_epoch_loss = epoch_loss / num_batches
+            avg_epoch_ber = epoch_ber / num_batches
+            avg_epoch_fer = epoch_fer / num_batches
+            
             self.train_losses.append(avg_epoch_loss)
             
             # Print progress
-            print(f"Epoch {epoch+1}/{num_epochs} - Loss: {avg_epoch_loss:.6f}")
+            print(f"Epoch {epoch+1}/{num_epochs} - Loss: {avg_epoch_loss:.6f}, BER: {avg_epoch_ber:.6f}, FER: {avg_epoch_fer:.6f}")
             
             # Validation
             if (epoch + 1) % validation_interval == 0:
@@ -147,7 +177,7 @@ class LDPCDecoderTrainer:
             batch_size (int): Batch size
             check_index_tensor (torch.Tensor): Check node index mapping
             var_index_tensor (torch.Tensor): Variable node index mapping
-            snr_range (list): Range of SNR values to validate on
+            snr_range (list): Range of SNR values to validate on [min_snr, max_snr]
             variable_bit_length (int): Length of variable bits
             
         Returns:
@@ -157,24 +187,39 @@ class LDPCDecoderTrainer:
         total_loss = 0.0
         total_ber = 0.0
         total_fer = 0.0
-        num_batches = 0
+        num_batches = 10  # Run multiple validation batches
         
         with torch.no_grad():
-            # Validate on different SNR values
-            for snr_db in snr_range:
-                # Generate random bits
-                transmitted_bits = torch.randint(0, 2, (batch_size, variable_bit_length), 
-                                               device=self.device).float()
+            for _ in range(num_batches):
+                # Generate random SNR values for each sample in the batch
+                snr_values = generate_variable_snr_values(
+                    batch_size=batch_size, 
+                    min_snr=snr_range[0], 
+                    max_snr=snr_range[1]
+                ).to(self.device)
                 
-                # Modulate using QPSK
-                qpsk_symbols = qpsk_modulate(transmitted_bits.view(batch_size, -1))
+                # Generate zero codewords
+                transmitted_bits = torch.zeros((batch_size, variable_bit_length), 
+                                              device=self.device).float()
                 
-                # Pass through AWGN channel
-                received_signal = awgn_channel(qpsk_symbols, snr_db)
+                # Generate modulated symbols (BPSK: 0->+1, 1->-1)
+                modulated_symbols = 1.0 - 2.0 * transmitted_bits
                 
-                # Demodulate to LLRs
-                llrs = qpsk_demodulate(received_signal, snr_db)
-                llrs = llrs.view(batch_size, -1)
+                # Add noise with different SNR for each sample
+                noisy_symbols = torch.zeros_like(modulated_symbols)
+                llrs = torch.zeros_like(modulated_symbols)
+                
+                for i in range(batch_size):
+                    # Calculate noise standard deviation for this sample
+                    snr_linear = 10 ** (snr_values[i].item() / 10)
+                    noise_std = 1.0 / np.sqrt(snr_linear)
+                    
+                    # Add Gaussian noise
+                    noise = torch.randn_like(modulated_symbols[i]) * noise_std
+                    noisy_symbols[i] = modulated_symbols[i] + noise
+                    
+                    # Convert to LLRs: LLR = 2*r/sigma^2 where r is the received signal
+                    llrs[i] = 2.0 * noisy_symbols[i] / (noise_std ** 2)
                 
                 # Forward pass
                 soft_bits, loss = self.decoder(llrs, check_index_tensor, var_index_tensor, transmitted_bits)
@@ -190,7 +235,6 @@ class LDPCDecoderTrainer:
                 total_loss += batch_loss
                 total_ber += ber
                 total_fer += fer
-                num_batches += 1
         
         # Compute averages
         avg_loss = total_loss / num_batches
@@ -227,21 +271,24 @@ class LDPCDecoderTrainer:
             total_fer = 0.0
             
             for _ in range(num_trials):
-                # Generate all-zero codeword
+                # Generate all-zero codeword (as per paper's recommendation)
                 transmitted_bits = torch.zeros((batch_size, variable_bit_length), device=self.device)
                 
-                # Modulate using QPSK
-                qpsk_symbols = qpsk_modulate(transmitted_bits.view(batch_size, -1))
+                # BPSK modulation (0 -> +1, 1 -> -1)
+                modulated_symbols = 1.0 - 2.0 * transmitted_bits
                 
-                # Pass through AWGN channel
-                received_signal = awgn_channel(qpsk_symbols, snr_db)
+                # Add AWGN noise
+                snr_linear = 10 ** (snr_db / 10)
+                noise_std = 1.0 / np.sqrt(snr_linear)
+                noise = torch.randn_like(modulated_symbols) * noise_std
+                noisy_symbols = modulated_symbols + noise
                 
-                # Demodulate to LLRs
-                llrs = qpsk_demodulate(received_signal, snr_db)
-                llrs = llrs.view(batch_size, -1)
+                # Convert to LLRs
+                llrs = 2.0 * noisy_symbols / (noise_std ** 2)
                 
                 # Decode
                 with torch.no_grad():
+                    # For inference, use the decode method which returns hard bits
                     hard_bits = self.decoder.decode(llrs, check_index_tensor, var_index_tensor)
                 
                 # Compute BER and FER
@@ -258,6 +305,9 @@ class LDPCDecoderTrainer:
             # Store results
             ber_results.append(avg_ber)
             fer_results.append(avg_fer)
+            
+            # Print progress at key SNR points
+            print(f"SNR: {snr_db} dB - BER: {avg_ber:.6f}, FER: {avg_fer:.6f}")
         
         return ber_results, fer_results
     

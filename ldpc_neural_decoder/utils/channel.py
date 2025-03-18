@@ -189,6 +189,28 @@ def compute_ber_fer(transmitted_bits, decoded_bits):
     
     return ber, fer
 
+def generate_variable_snr_values(batch_size, min_snr, max_snr):
+    """
+    Generate random SNR values within a specified range for each sample in a batch.
+    
+    As described in the paper, this generates SNR values randomly within an interval
+    where the FER ranges from 10^-1 to 10^-8 (extended from paper's 10^-4 to observe error floors).
+    
+    Args:
+        batch_size (int): Number of samples in the batch
+        min_snr (float): Minimum SNR value in dB (corresponds to FER ~10^-1)
+        max_snr (float): Maximum SNR value in dB (corresponds to FER ~10^-8)
+        
+    Returns:
+        torch.Tensor: Random SNR values for each sample, shape (batch_size,)
+    """
+    # Generate uniform random values between 0 and 1
+    uniform_values = torch.rand(batch_size)
+    
+    # Scale to the specified SNR range
+    snr_values = min_snr + (max_snr - min_snr) * uniform_values
+    
+    return snr_values
 
 class AWGNChannel:
     """
