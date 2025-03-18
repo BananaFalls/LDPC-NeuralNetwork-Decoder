@@ -212,43 +212,44 @@ def generate_variable_snr_values(batch_size, min_snr, max_snr):
     
     return snr_values
 
-class AWGNChannel:
-    """
-    Additive White Gaussian Noise (AWGN) channel.
+# Commented out because it's not used
+# class AWGNChannel:
+#     """
+#     Additive White Gaussian Noise (AWGN) channel.
     
-    This class simulates an AWGN channel for binary transmission.
-    """
-    def __init__(self):
-        """
-        Initialize the AWGN channel.
-        """
-        pass
+#     This class simulates an AWGN channel for binary transmission.
+#     """
+#     def __init__(self):
+#         """
+#         Initialize the AWGN channel.
+#         """
+#         pass
     
-    def transmit(self, bits, snr_db):
-        """
-        Transmit bits through the AWGN channel.
+#     def transmit(self, bits, snr_db):
+#         """
+#         Transmit bits through the AWGN channel.
         
-        Args:
-            bits (torch.Tensor): Binary bits (0s and 1s) to transmit. Shape (batch_size, n_bits)
-            snr_db (float): Signal-to-Noise Ratio in dB
+#         Args:
+#             bits (torch.Tensor): Binary bits (0s and 1s) to transmit. Shape (batch_size, n_bits)
+#             snr_db (float): Signal-to-Noise Ratio in dB
             
-        Returns:
-            torch.Tensor: Log-Likelihood Ratios (LLRs) of shape (batch_size, n_bits)
-        """
-        # Convert bits to BPSK symbols: 0 -> +1, 1 -> -1
-        symbols = 1.0 - 2.0 * bits
+#         Returns:
+#             torch.Tensor: Log-Likelihood Ratios (LLRs) of shape (batch_size, n_bits)
+#         """
+#         # Convert bits to BPSK symbols: 0 -> +1, 1 -> -1
+#         symbols = 1.0 - 2.0 * bits
         
-        # Convert SNR from dB to linear scale
-        snr_linear = 10 ** (snr_db / 10)
+#         # Convert SNR from dB to linear scale
+#         snr_linear = 10 ** (snr_db / 10)
         
-        # Calculate noise standard deviation
-        noise_std = 1.0 / np.sqrt(snr_linear)
+#         # Calculate noise standard deviation
+#         noise_std = 1.0 / np.sqrt(snr_linear)
         
-        # Add Gaussian noise
-        noise = torch.randn_like(symbols) * noise_std
-        received_symbols = symbols + noise
+#         # Add Gaussian noise
+#         noise = torch.randn_like(symbols) * noise_std
+#         received_symbols = symbols + noise
         
-        # Convert to LLRs: LLR = 2*r/sigma^2 where r is the received signal
-        llrs = 2.0 * received_symbols / (noise_std ** 2)
+#         # Convert to LLRs: LLR = 2*r/sigma^2 where r is the received signal
+#         llrs = 2.0 * received_symbols / (noise_std ** 2)
         
-        return llrs 
+#         return llrs 

@@ -77,6 +77,7 @@ class LDPCDecoderTrainer:
         
         print(f"Training with SNR values varying randomly between {snr_range[0]} and {snr_range[1]} dB")
         print(f"Using SGD optimizer with lr={learning_rate}, momentum={momentum}, weight_decay={weight_decay}")
+        print(f"Using QPSK modulation for training")
         
         # Training loop
         for epoch in range(num_epochs):
@@ -97,24 +98,24 @@ class LDPCDecoderTrainer:
             transmitted_bits = torch.zeros((batch_size, variable_bit_length), 
                                          device=self.device).float()
             
-            # Generate modulated symbols (using BPSK for simplicity: 0->+1, 1->-1)
-            modulated_symbols = 1.0 - 2.0 * transmitted_bits
+            # QPSK modulation
+            qpsk_symbols = qpsk_modulate(transmitted_bits)
             
             # Add noise with different SNR for each sample
-            noisy_symbols = torch.zeros_like(modulated_symbols)
-            llrs = torch.zeros_like(modulated_symbols)
+            noisy_symbols = torch.zeros_like(qpsk_symbols, dtype=torch.complex64)
             
             for i in range(batch_size):
-                # Calculate noise standard deviation for this sample
-                snr_linear = 10 ** (snr_values[i].item() / 10)
-                noise_std = 1.0 / np.sqrt(snr_linear)
-                
-                # Add Gaussian noise
-                noise = torch.randn_like(modulated_symbols[i]) * noise_std
-                noisy_symbols[i] = modulated_symbols[i] + noise
-                
-                # Convert to LLRs: LLR = 2*r/sigma^2 where r is the received signal
-                llrs[i] = 2.0 * noisy_symbols[i] / (noise_std ** 2)
+                # Pass through AWGN channel with this sample's SNR
+                noisy_symbols[i] = awgn_channel(qpsk_symbols[i].unsqueeze(0), snr_values[i].item()).squeeze(0)
+            
+            # Get LLRs for each codeword with its corresponding SNR
+            llrs_list = []
+            for i in range(batch_size):
+                llr = qpsk_demodulate(noisy_symbols[i].unsqueeze(0), snr_values[i].item()).squeeze(0)
+                llrs_list.append(llr)
+            
+            # Stack LLRs into a batch
+            llrs = torch.stack(llrs_list).reshape(batch_size, variable_bit_length)
             
             # Zero gradients
             optimizer.zero_grad()
@@ -202,24 +203,24 @@ class LDPCDecoderTrainer:
                 transmitted_bits = torch.zeros((batch_size, variable_bit_length), 
                                               device=self.device).float()
                 
-                # Generate modulated symbols (BPSK: 0->+1, 1->-1)
-                modulated_symbols = 1.0 - 2.0 * transmitted_bits
+                # QPSK modulation
+                qpsk_symbols = qpsk_modulate(transmitted_bits)
                 
                 # Add noise with different SNR for each sample
-                noisy_symbols = torch.zeros_like(modulated_symbols)
-                llrs = torch.zeros_like(modulated_symbols)
+                noisy_symbols = torch.zeros_like(qpsk_symbols, dtype=torch.complex64)
                 
                 for i in range(batch_size):
-                    # Calculate noise standard deviation for this sample
-                    snr_linear = 10 ** (snr_values[i].item() / 10)
-                    noise_std = 1.0 / np.sqrt(snr_linear)
-                    
-                    # Add Gaussian noise
-                    noise = torch.randn_like(modulated_symbols[i]) * noise_std
-                    noisy_symbols[i] = modulated_symbols[i] + noise
-                    
-                    # Convert to LLRs: LLR = 2*r/sigma^2 where r is the received signal
-                    llrs[i] = 2.0 * noisy_symbols[i] / (noise_std ** 2)
+                    # Pass through AWGN channel with this sample's SNR
+                    noisy_symbols[i] = awgn_channel(qpsk_symbols[i].unsqueeze(0), snr_values[i].item()).squeeze(0)
+                
+                # Get LLRs for each codeword with its corresponding SNR
+                llrs_list = []
+                for i in range(batch_size):
+                    llr = qpsk_demodulate(noisy_symbols[i].unsqueeze(0), snr_values[i].item()).squeeze(0)
+                    llrs_list.append(llr)
+                
+                # Stack LLRs into a batch
+                llrs = torch.stack(llrs_list).reshape(batch_size, variable_bit_length)
                 
                 # Forward pass
                 soft_bits, loss = self.decoder(llrs, check_index_tensor, var_index_tensor, transmitted_bits)
@@ -274,17 +275,15 @@ class LDPCDecoderTrainer:
                 # Generate all-zero codeword (as per paper's recommendation)
                 transmitted_bits = torch.zeros((batch_size, variable_bit_length), device=self.device)
                 
-                # BPSK modulation (0 -> +1, 1 -> -1)
-                modulated_symbols = 1.0 - 2.0 * transmitted_bits
+                # QPSK modulation
+                qpsk_symbols = qpsk_modulate(transmitted_bits)
                 
-                # Add AWGN noise
-                snr_linear = 10 ** (snr_db / 10)
-                noise_std = 1.0 / np.sqrt(snr_linear)
-                noise = torch.randn_like(modulated_symbols) * noise_std
-                noisy_symbols = modulated_symbols + noise
+                # Pass through AWGN channel
+                noisy_symbols = awgn_channel(qpsk_symbols, snr_db)
                 
-                # Convert to LLRs
-                llrs = 2.0 * noisy_symbols / (noise_std ** 2)
+                # Demodulate to LLRs
+                llrs = qpsk_demodulate(noisy_symbols, snr_db)
+                llrs = llrs.reshape(batch_size, variable_bit_length)
                 
                 # Decode
                 with torch.no_grad():

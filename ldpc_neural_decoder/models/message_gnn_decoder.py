@@ -118,6 +118,12 @@ class VariableGNNLayer(nn.Module):
     Variable-side GNN layer for alternating message passing in LDPC decoding.
     
     This layer updates messages based on their connections through variable nodes.
+
+    The incoming messages are from the check nodes in the previous iteration.
+    The outgoing messages are passed to the check nodes in the next iteration.
+
+    The incoming messages from CheckGNNLayer are "check-to-variable" messages.
+    The outgoing messages from VariableGNNLayer are "variable-to-check" messages.
     """
     
     def __init__(self, num_message_types=1, hidden_dim=64):
@@ -166,7 +172,7 @@ class VariableGNNLayer(nn.Module):
         aggregated_messages = torch.matmul(var_to_check_adjacency, messages_with_types)
         
         # Combine with check messages
-        update_input = torch.cat([messages_with_types, check_messages], dim=2)
+        update_input = torch.cat([aggregated_messages, check_messages], dim=2)
         updated_var_messages = self.var_update(update_input)
         
         return updated_var_messages
@@ -244,7 +250,7 @@ class MessageGNNDecoder(nn.Module):
     Message-centered GNN decoder for LDPC codes with alternating layers.
     
     This decoder treats messages as nodes in a graph and updates them using graph neural networks.
-    It implements alternating variable and check layers with deep residual connections.
+    It implements alternating variable and check layers, with residual connections from the previous "n" variable layer to the current variable layer.
     The graph structure is defined by the Tanner graph of the LDPC code.
     """
     
