@@ -36,16 +36,16 @@ def main():
     _, check_index_tensor, var_index_tensor, output_index_tensor = create_LLR_mapping(H_T)
     
     # Decoder settings
-    num_iterations = 15  # Increased from 10 to 15
+    num_iterations = 3  # Increased from 10 to 15
     hidden_dim = 64      # Increased from 32 to 64
     num_of_residual_layers = 2
     
     # Training settings
-    num_epochs = 50
+    num_epochs = 2
     batch_size = 128
     learning_rate = 1e-4  # Reduced from 1e-3 to 1e-4
-    momentum = 0.9
-    weight_decay = 1e-5
+    momentum = 0
+    weight_decay = 1e-4
     snr_range = [0.0, 8.0]  # Widened from [1.0, 5.0] to [0.0, 8.0]
     batches_per_epoch = 10  # Multiple batches per epoch
     
