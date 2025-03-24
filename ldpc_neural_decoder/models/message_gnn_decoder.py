@@ -22,108 +22,15 @@ def safe_index(tensor, idx):
     result = tensor[safe_idx]
     return result
 
-
-class MessageGNNLayer(nn.Module):
-    """
-    Message-centered GNN layer for LDPC decoding.
-    
-    This layer performs message passing in a Tanner graph, with messages as nodes.
-    Messages are updated based on their connections through variable nodes and check nodes.
-    """
-    
-    def __init__(self, num_message_types=1, hidden_dim=64):
-        super().__init__()
-        
-        # Message type specific embeddings
-        self.message_type_embeddings = nn.Parameter(torch.randn(num_message_types, hidden_dim))
-        
-        # Neural networks for message updates
-        self.var_to_check_update = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-        
-        self.check_to_var_update = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
-        
-        # Output projection to get final message values
-        self.output_projection = nn.Linear(hidden_dim, 1)
-    
-    def forward(self, message_features, message_types, var_to_check_adjacency, check_to_var_adjacency):
-        """
-        Forward pass of the Message GNN Layer.
-        
-        Args:
-            message_features (torch.Tensor): Features for each message, shape (batch_size, num_messages, hidden_dim)
-            message_types (torch.Tensor): Type indices for each message, shape (num_messages,)
-            var_to_check_adjacency (torch.Tensor): Adjacency matrix for variable-to-check connections
-            check_to_var_adjacency (torch.Tensor): Adjacency matrix for check-to-variable connections
-            
-        Returns:
-            torch.Tensor: Updated message features, shape (batch_size, num_messages, hidden_dim)
-        """
-        batch_size, num_messages, hidden_dim = message_features.shape
-        device = message_features.device
-        
-        # Ensure message_types are valid indices
-        safe_message_types = torch.clamp(message_types, 0, self.message_type_embeddings.shape[0] - 1)
-        
-        # Get embeddings for each message type
-        type_embeddings = self.message_type_embeddings[safe_message_types]  # (num_messages, hidden_dim)
-        
-        # Add type embeddings to message features
-        message_features_with_types = message_features + type_embeddings.unsqueeze(0)  # (batch_size, num_messages, hidden_dim)
-        
-        # Check if adjacency matrices have the right dimensions
-        if var_to_check_adjacency.shape[0] != num_messages or var_to_check_adjacency.shape[1] != num_messages:
-            raise ValueError(f"var_to_check_adjacency has shape {var_to_check_adjacency.shape}, expected ({num_messages}, {num_messages})")
-        
-        if check_to_var_adjacency.shape[0] != num_messages or check_to_var_adjacency.shape[1] != num_messages:
-            raise ValueError(f"check_to_var_adjacency has shape {check_to_var_adjacency.shape}, expected ({num_messages}, {num_messages})")
-        
-        # Variable-to-check message update
-        var_to_check_messages = torch.matmul(var_to_check_adjacency, message_features_with_types)
-        var_to_check_input = torch.cat([message_features_with_types, var_to_check_messages], dim=2)
-        var_to_check_updated = self.var_to_check_update(var_to_check_input)
-        
-        # Check-to-variable message update
-        check_to_var_messages = torch.matmul(check_to_var_adjacency, message_features_with_types)
-        check_to_var_input = torch.cat([message_features_with_types, check_to_var_messages], dim=2)
-        check_to_var_updated = self.check_to_var_update(check_to_var_input)
-        
-        # Combine updates
-        updated_features = var_to_check_updated + check_to_var_updated
-        
-        return updated_features
-    
-    def decode_messages(self, message_features):
-        """
-        Decode message features to LLR values.
-        
-        Args:
-            message_features (torch.Tensor): Message features, shape (batch_size, num_messages, hidden_dim)
-            
-        Returns:
-            torch.Tensor: Decoded LLR values, shape (batch_size, num_messages)
-        """
-        return self.output_projection(message_features).squeeze(-1)
-
-
 class VariableGNNLayer(nn.Module):
     """
     Variable-side GNN layer for alternating message passing in LDPC decoding.
     
     This layer updates messages based on their connections through variable nodes.
-
-    The incoming messages are from the check nodes in the previous iteration.
-    The outgoing messages are passed to the check nodes in the next iteration.
-
     The incoming messages from CheckGNNLayer are "check-to-variable" messages.
     The outgoing messages from VariableGNNLayer are "variable-to-check" messages.
+    
+    This implementation works with raw LLR values in the first dimension of the feature vector.
     """
     
     def __init__(self, num_message_types=1, hidden_dim=64):
@@ -142,11 +49,12 @@ class VariableGNNLayer(nn.Module):
         # Output projection
         self.output_projection = nn.Linear(hidden_dim, 1)
     
-    def forward(self, var_messages, check_messages, message_types, var_to_check_adjacency):
+    def forward(self, copied_llr, var_messages, check_messages, message_types, var_to_check_adjacency):
         """
         Forward pass of the Variable GNN Layer.
         
         Args:
+            copied_llr (torch.Tensor): Copied original input LLR values into message features
             var_messages (torch.Tensor): Variable-side message features
             check_messages (torch.Tensor): Check-side message features
             message_types (torch.Tensor): Type indices for each message
@@ -155,8 +63,8 @@ class VariableGNNLayer(nn.Module):
         Returns:
             torch.Tensor: Updated variable-side message features
         """
-        batch_size, num_messages, hidden_dim = var_messages.shape
-        device = var_messages.device
+        # batch_size, num_messages, hidden_dim = var_messages.shape
+        # device = var_messages.device
         
         # Ensure message_types are valid indices
         safe_message_types = torch.clamp(message_types, 0, self.message_type_embeddings.shape[0] - 1)
@@ -171,9 +79,9 @@ class VariableGNNLayer(nn.Module):
         # Gather messages from variables sharing the same check node
         aggregated_messages = torch.matmul(var_to_check_adjacency, messages_with_types)
         
-        # Combine with check messages
+        # Combine with check messages from previous iteration's check_to_variable messages layer
         update_input = torch.cat([aggregated_messages, check_messages], dim=2)
-        updated_var_messages = self.var_update(update_input)
+        updated_var_messages = self.var_update(update_input) + copied_llr
         
         return updated_var_messages
     
@@ -263,10 +171,7 @@ class MessageGNNDecoder(nn.Module):
         self.num_message_types = num_message_types
         self.num_of_residual_layers = num_of_residual_layers
         
-        # Input embedding layer
-        self.input_embedding = nn.Linear(1, hidden_dim)
-        
-        # Variable-side GNN layers
+        # Modify Variable-side GNN layers to work with scalar inputs
         self.var_gnn_layers = nn.ModuleList([
             VariableGNNLayer(num_message_types, hidden_dim)
             for _ in range(num_iterations)
@@ -449,34 +354,34 @@ class MessageGNNDecoder(nn.Module):
             num_vars=num_vars
         )
     
-    def decode(self, input_llr, message_to_var_mapping, message_types=None,
-              var_to_check_adjacency=None, check_to_var_adjacency=None):
-        """
-        Convenience method for decoding without training.
+    # def decode(self, input_llr, message_to_var_mapping, message_types=None,
+    #           var_to_check_adjacency=None, check_to_var_adjacency=None):
+    #     """
+    #     Convenience method for decoding without training.
         
-        Args:
-            input_llr (torch.Tensor): Input LLR values for each variable node
-            message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes
-            message_types (torch.Tensor, optional): Types of each message for weight sharing
-            var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for var-to-check messages
-            check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-var messages
+    #     Args:
+    #         input_llr (torch.Tensor): Input LLR values for each variable node
+    #         message_to_var_mapping (torch.Tensor): Mapping from messages to variable nodes
+    #         message_types (torch.Tensor, optional): Types of each message for weight sharing
+    #         var_to_check_adjacency (torch.Tensor, optional): Adjacency matrix for var-to-check messages
+    #         check_to_var_adjacency (torch.Tensor, optional): Adjacency matrix for check-to-var messages
             
-        Returns:
-            torch.Tensor: Hard decoded bits (0 or 1)
-        """
-        with torch.no_grad():
-            output_probs = self.forward(
-                input_llr, 
-                message_to_var_mapping, 
-                message_types, 
-                var_to_check_adjacency,
-                check_to_var_adjacency
-            )
+    #     Returns:
+    #         torch.Tensor: Hard decoded bits (0 or 1)
+    #     """
+    #     with torch.no_grad():
+    #         output_probs = self.forward(
+    #             input_llr, 
+    #             message_to_var_mapping, 
+    #             message_types, 
+    #             var_to_check_adjacency,
+    #             check_to_var_adjacency
+    #         )
             
-            # Convert probabilities to bits (0 or 1)
-            decoded_bits = (output_probs >= 0.5).float()
+    #         # Convert probabilities to bits (0 or 1)
+    #         decoded_bits = (output_probs >= 0.5).float()
             
-            return decoded_bits
+    #         return decoded_bits
 
 
 class TannerToMessageGraph:
@@ -547,7 +452,15 @@ class TannerToMessageGraph:
                     self.check_to_messages[check_idx].append(msg_idx)
                     
                     msg_idx += 1
-        
+        # Print the first five message nodes
+        print("[debug] First five message nodes (check_idx, var_idx):", self.messages[:5])
+
+        # Print the first five variable-to-messages mappings
+        print("[debug] First five variable-to-messages matrix:", {var_idx: self.var_to_messages[var_idx][:5] for var_idx in range(self.n)})
+
+        # Print the first five check-to-messages mappings
+        print("[debug] First five check-to-messages matrix:", {check_idx: self.check_to_messages[check_idx][:5] for check_idx in range(self.m)})
+
         self.num_messages = len(self.messages)
         
         # Default message types (all same type)
@@ -570,20 +483,22 @@ class TannerToMessageGraph:
         
         # Set up var-to-check adjacency (messages connected through same variable)
         for var_idx in range(self.n):
-            messages = self.var_to_messages[var_idx]
-            for i, msg1 in enumerate(messages):
-                for j, msg2 in enumerate(messages):
+            messages_index = self.var_to_messages[var_idx]
+            for i, msg1 in enumerate(messages_index):
+                for j, msg2 in enumerate(messages_index):
                     if i != j:  # Don't connect message to itself
-                        self.var_to_check_adjacency[msg1, msg2] = 1.0
-        
+                        self.var_to_check_adjacency[msg1, msg2] = 1.0 # this means that message with index msg1 is connected to the message with index msg2 through the same variable
+        print(f"[debug] var_to_check_adjacency: {self.var_to_check_adjacency}")
+
         # Set up check-to-var adjacency (messages connected through same check)
         for check_idx in range(self.m):
-            messages = self.check_to_messages[check_idx]
-            for i, msg1 in enumerate(messages):
-                for j, msg2 in enumerate(messages):
+            messages_index = self.check_to_messages[check_idx]
+            for i, msg1 in enumerate(messages_index):
+                for j, msg2 in enumerate(messages_index):
                     if i != j:  # Don't connect message to itself
-                        self.check_to_var_adjacency[msg1, msg2] = 1.0
-    
+                        self.check_to_var_adjacency[msg1, msg2] = 1.0 # this means that message with index msg1 is connected to the message with index msg2 through the same check
+        print(f"[debug] check_to_var_adjacency: {self.check_to_var_adjacency}")
+
     def get_message_to_var_mapping(self):
         """
         Get a tensor mapping each message to its variable node.
@@ -752,17 +667,18 @@ def create_message_type_mapping(H, base_graph, lifting_factor):
                 base_edge = (base_row, base_col)
                 
                 # If this base edge hasn't been seen before, assign a new type
-                if base_edge not in type_mapping and base_graph[base_row, base_col] == 1:
-                    type_mapping[base_edge] = type_idx
+                if base_edge not in type_mapping and base_graph[base_row, base_col] >= 0:
+                    type_mapping[base_edge] = base_graph[base_row, base_col]
                     type_idx += 1
                 
-                # Assign the type to this message if the corresponding base graph entry is 1
-                if base_graph[base_row, base_col] == 1:
+                # Assign the type to this message if the corresponding base graph entry greater than 0
+                if base_graph[base_row, base_col] >= 0:
                     message_types[message_idx] = type_mapping[base_edge]
                 
                 message_idx += 1
     
-    print(f"Created {type_idx} message types from base graph with {base_graph.sum().item()} edges")
+    print(f"[debug] base graph: {base_graph.shape}")
+    print(f"[debug] Created {type_idx} message types from base graph with {(base_graph != -1).sum().item()} edges")
     return message_types
 
 

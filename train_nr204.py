@@ -2,7 +2,6 @@ import os
 import torch
 import numpy as np
 import matplotlib.pyplot as plt
-from torch.utils.data import Dataset, DataLoader
 from ldpc_neural_decoder.models.message_gnn_decoder import create_message_gnn_decoder
 from ldpc_neural_decoder.utils.ldpc_utils import load_base_matrix, expand_base_matrix, create_LLR_mapping
 from ldpc_neural_decoder.utils.channel import qpsk_modulate, awgn_channel, qpsk_demodulate, compute_ber_fer
@@ -37,14 +36,14 @@ def main():
     
     # Decoder settings
     num_iterations = 3  # Increased from 10 to 15
-    hidden_dim = 64      # Increased from 32 to 64
+    hidden_dim = 32      # Increased from 32 to 64
     num_of_residual_layers = 2
     
     # Training settings
     num_epochs = 2
-    batch_size = 128
+    batch_size = 64
     learning_rate = 1e-4  # Reduced from 1e-3 to 1e-4
-    momentum = 0
+    momentum = 0.9
     weight_decay = 1e-4
     snr_range = [0.0, 8.0]  # Widened from [1.0, 5.0] to [0.0, 8.0]
     batches_per_epoch = 10  # Multiple batches per epoch
@@ -87,21 +86,21 @@ def main():
     for epoch in range(num_epochs):
         decoder.train()
         epoch_loss = 0.0
-        epoch_ber = 0.0
+        epoch_ber = 0.0 
         epoch_fer = 0.0
         
         # Multiple batches per epoch
-        for batch_idx in range(batches_per_epoch):
+        for batch in range(batches_per_epoch):
             # Generate training data
             # Using zero codewords as per paper recommendation
             variable_bit_length = H.shape[1]
             transmitted_bits = torch.zeros((batch_size, variable_bit_length), device=device)
+
+            # QPSK modulation
+            qpsk_symbols = qpsk_modulate(transmitted_bits)
             
             # Generate random SNR values within the range
             snr_values = torch.FloatTensor(batch_size).uniform_(snr_range[0], snr_range[1]).to(device)
-            
-            # QPSK modulation
-            qpsk_symbols = qpsk_modulate(transmitted_bits)
             
             # Add noise with different SNR for each sample
             noisy_symbols = torch.zeros_like(qpsk_symbols, dtype=torch.complex64)
@@ -117,8 +116,9 @@ def main():
             
             # Stack LLRs into a batch
             input_llrs = torch.stack(llrs_list).to(device)
+            print("[debug] input_llrs:", input_llrs) 
             
-            # Forward pass with custom message GNN decoder
+            # Clear any previously accumulated gradients before computing the new forward pass and its gradients. 
             optimizer.zero_grad()
             
             # Forward pass through the decoder

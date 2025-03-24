@@ -1,0 +1,108 @@
+# Message-Centered GNN Architecture for LDPC Decoding
+
+## Overview
+The Message-Centered Graph Neural Network (GNN) architecture implemented in the `message_gnn_decoder.py` file represents an innovative approach to LDPC decoding. Unlike traditional belief propagation algorithms or standard neural decoders, this architecture transforms the decoding problem by treating messages as nodes in a graph, enabling more sophisticated message passing operations through learnable neural networks.
+
+## Key Innovations
+
+1. **Message-Centered Representation**:
+   - Traditional Tanner graphs represent variable and check nodes as vertices
+   - This architecture treats messages (traditionally edges) as nodes in a new graph
+   - New edges connect messages that share the same variable or check node
+   - Enables more complex message representations and update rules
+
+2. **Neural Message Passing**:
+   - Updates to variable-to-check and check-to-variable messages are learned
+   - High-dimensional message representations (hidden_dim parameter)
+   - Alternating layer architecture mimics belief propagation iterations
+   - Weight sharing through message type embeddings
+
+3. **Residual Connections**:
+   - Multiple residual connections across iterations facilitate gradient flow
+   - Original LLR values are preserved through direct connections
+   - Enables training of deeper networks (more iterations)
+
+## Architecture Components
+
+### 1. VariableGNNLayer
+- Updates messages from variable nodes to check nodes
+- Takes variable messages, check messages, message types, and adjacency information
+- Applies neural transformations and type embeddings
+- Maintains connection to original LLR values
+
+### 2. CheckGNNLayer
+- Updates messages from check nodes to variable nodes
+- Similar structure to VariableGNNLayer but processes in the opposite direction
+- Combines messages through learned transformations
+
+### 3. MessageGNNDecoder
+- Main decoder class integrating multiple Variable and Check GNN layers
+- Manages the message queue for residual connections
+- Implements the alternating message-passing scheme
+- Includes a parameter-free output mapping layer
+
+### 4. TannerToMessageGraph
+- Utility class for converting a traditional Tanner graph to a message-centered graph
+- Creates adjacency matrices for message passing
+- Maps between variable/check nodes and messages
+
+## Implementation Details
+
+### Message Types and Weight Sharing
+- Messages can be assigned types based on a base graph structure
+- Same message types share weights, reducing parameter count
+- Enables efficient scaling to large LDPC codes through lifting
+
+### Adjacency Matrices
+- var_to_check_adjacency: Connects messages sharing the same variable node
+- check_to_var_adjacency: Connects messages sharing the same check node
+- Enables efficient message aggregation through matrix multiplication
+
+### Layer Normalization
+- Applied after each message update to stabilize training
+- Crucial for deeper networks with many iterations
+
+### Parameter-Free Output Mapping
+- Final mapping of high-dimensional message features back to scalar LLRs
+- Combines messages for each variable node
+- Adds original input LLRs in log domain
+
+## Advantages Over Traditional Decoders
+
+1. **Learned Update Rules**:
+   - Traditional decoders use fixed message update rules
+   - This architecture learns optimal update rules from data
+   - Can adapt to different channel conditions and code structures
+
+2. **Rich Message Representation**:
+   - Traditional messages are scalar log-likelihood ratios
+   - This architecture uses high-dimensional vectors
+   - Captures more complex dependencies and relationships
+
+3. **Residual Connections**:
+   - Helps preserve information across iterations
+   - Facilitates training deeper networks
+   - Improves gradient flow during backpropagation
+
+4. **Flexible Graph Structure**:
+   - Can represent arbitrary code structures
+   - Easy to adapt to different code rates and lengths
+   - Handles irregular LDPC codes naturally
+
+## Relationship to Report Content
+
+The report "EE4002R_CA2_Report_LeongKahSheng" should emphasize:
+
+1. The theoretical foundations of message-passing decoders
+2. How neural networks can enhance traditional belief propagation
+3. The innovations in the message-centered representation
+4. Experimental results comparing this approach to traditional decoders
+5. Analysis of complexity, performance, and training considerations
+
+## Technical Implementation Notes
+
+- Built with PyTorch neural network framework
+- Utilizes efficient tensor operations for message passing
+- Scalable to large LDPC codes through weight sharing
+- Supports batched processing for efficient training and inference
+- Configurable number of iterations, hidden dimensions, and residual connections 

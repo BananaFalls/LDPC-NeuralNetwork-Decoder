@@ -94,7 +94,7 @@ for snr in snr_values:
     hard_bits = (llrs < 0).float()
     print(f"Hard bits (row 1): {hard_bits[0]}")
     
-    # Count errors
+    # Count errors 
     bit_errors = (hard_bits != bits).sum().item()
     ber = bit_errors / bits.numel()
     print(f"Bit errors: {bit_errors} out of {bits.numel()}")

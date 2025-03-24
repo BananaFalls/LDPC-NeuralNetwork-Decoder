@@ -105,6 +105,80 @@ To train the message-centered GNN LDPC decoder:
 python -m ldpc_neural_decoder.examples.message_gnn_example --mode train
 ```
 
+## Message-Centered GNN LDPC Decoder
+
+Our message-centered GNN LDPC decoder represents a novel approach to neural LDPC decoding by transforming the traditional Tanner graph into a message-centered graph where messages become nodes.
+
+### Architecture Details
+
+The architecture consists of several key components:
+
+#### 1. VariableGNNLayer
+
+```python
+class VariableGNNLayer(nn.Module):
+    """
+    Variable-side GNN layer for alternating message passing in LDPC decoding.
+    
+    This layer updates messages based on their connections through variable nodes.
+    The incoming messages from CheckGNNLayer are "check-to-variable" messages.
+    The outgoing messages from VariableGNNLayer are "variable-to-check" messages.
+    """
+```
+
+The VariableGNNLayer:
+- Takes LLR values, variable messages, check messages, message types, and adjacency information
+- Applies message type embeddings to enrich features
+- Gathers messages from variables sharing the same check node
+- Combines with check messages from previous iteration
+- Produces updated variable-side messages
+
+#### 2. CheckGNNLayer
+
+Similar to the VariableGNNLayer but processes information in the opposite direction:
+- Updates messages based on connections through check nodes
+- Mirrors the Variable GNN Layer structure
+- Processes information from check to variable nodes
+
+#### 3. MessageGNNDecoder
+
+The main decoder class that:
+- Integrates multiple Variable and Check GNN layers
+- Manages message queues for residual connections
+- Implements the alternating message-passing scheme
+- Includes a parameter-free output mapping layer
+
+#### 4. TannerToMessageGraph
+
+Utility class that:
+- Converts a traditional Tanner graph to a message-centered graph
+- Creates adjacency matrices for message passing
+- Maps between variable/check nodes and messages
+
+### Advantages of the Message-Centered Approach
+
+1. **Learned Update Rules**: The neural network learns optimal message update functions from data
+2. **Rich Message Representation**: High-dimensional vectors capture complex dependencies
+3. **Residual Connections**: Preserve information across iterations and improve gradient flow
+4. **Flexible Graph Structure**: Naturally handles arbitrary code structures and irregular LDPC codes
+
+### Implementation Details
+
+- **Message Types**: Message types based on the base graph enable efficient weight sharing
+- **Adjacency Matrices**: Connect messages sharing the same variable or check node
+- **Layer Normalization**: Stabilizes training of deeper networks
+- **Residual Queue**: Maintains previous variable-to-check messages for residual connections
+- **Parameter-Free Output**: Final layer maps high-dimensional features back to LLRs without parameters
+
+### Training Process
+
+The message-centered GNN decoder is trained by:
+1. Converting input LLRs to high-dimensional features
+2. Passing through alternating variable and check GNN layers
+3. Using residual connections across iterations
+4. Mapping final messages back to probabilities
+5. Training with binary cross-entropy loss
+
 ## Command Line Arguments
 
 - `--mode`: Mode of operation (`train`, `evaluate`, `compare`, or `visualize`)
@@ -152,22 +226,6 @@ The GNN-based LDPC decoder treats the Tanner graph as a graph neural network wit
 6. **BaseGraphGNNDecoder**: Extends the GNN approach for 5G LDPC base graph structure.
 
 For more details, see [GNN LDPC Decoder README](models/README_GNN_LDPC.md).
-
-### Message-Centered GNN LDPC Decoder
-
-The message-centered GNN LDPC decoder implements a novel approach by treating messages as nodes in the GNN:
-
-1. **MessageGNNLayer**: Core component that implements message passing between message nodes.
-2. **MessageGNNDecoder**: Main decoder class that manages the overall decoding process.
-3. **TannerToMessageGraph**: Utility class to convert a Tanner graph to a message-centered graph.
-
-Key advantages:
-- More natural representation of belief propagation
-- Enhanced parameter sharing across similar message types
-- Improved generalization to different code structures
-- Reduced parameter count compared to node-centered GNNs
-
-For more details, see [Message GNN LDPC Decoder README](models/README_MESSAGE_GNN.md).
 
 ### Traditional Decoders
 
