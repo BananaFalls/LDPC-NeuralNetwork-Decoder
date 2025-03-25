@@ -8,10 +8,22 @@ Neural network models for LDPC decoding.
 from ldpc_neural_decoder.models.traditional_decoders import BeliefPropagationDecoder, MinSumScaledDecoder
 from ldpc_neural_decoder.models.message_gnn_decoder import (
     MessageGNNDecoder,
+    VariableGNNLayer,
+    CheckGNNLayer,
     TannerToMessageGraph,
     create_message_gnn_decoder,
-    create_check_index_tensor,
+    get_llr_from_noise
 )
+
+from ldpc_neural_decoder.models.layers import (
+    VarNode,
+    CheckNode,
+    VarNodeLayer,
+    CheckNodeLayer
+)
+
+from ldpc_neural_decoder.models.decoder import Decoder
+from ldpc_neural_decoder.models.traditional_decoders import BPDecoder, MSDecoder
 
 __all__ = [
     # 'CheckLayer',
@@ -21,7 +33,16 @@ __all__ = [
     'BeliefPropagationDecoder',
     'MinSumScaledDecoder',
     'MessageGNNDecoder',
+    'VariableGNNLayer',
+    'CheckGNNLayer',
     'TannerToMessageGraph',
     'create_message_gnn_decoder',
-    'create_check_index_tensor',
+    'get_llr_from_noise',
+    'VarNode',
+    'CheckNode',
+    'VarNodeLayer',
+    'CheckNodeLayer',
+    'Decoder',
+    'BPDecoder',
+    'MSDecoder'
 ] 

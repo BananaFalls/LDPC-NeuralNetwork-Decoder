@@ -2,6 +2,8 @@
 
 A Graph Neural Network (GNN) based decoder for Low-Density Parity-Check (LDPC) codes with a focus on 5G NR LDPC codes.
 
+> **Navigation**: For quick access to all repository components, see the [Contents Page](CONTENTS.md).
+
 ## Overview
 
 This project implements a neural network-based decoder for LDPC codes that focuses on a message-passing framework. The key approach treats messages in the Tanner graph as nodes in a GNN, which offers improved parameter efficiency and better generalization across different code structures and SNR environments.

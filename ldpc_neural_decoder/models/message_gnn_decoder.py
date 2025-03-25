@@ -25,132 +25,134 @@ def safe_index(tensor, idx):
 class VariableGNNLayer(nn.Module):
     """
     Variable-side GNN layer for alternating message passing in LDPC decoding.
-    
-    This layer updates messages based on their connections through variable nodes.
-    The incoming messages from CheckGNNLayer are "check-to-variable" messages.
-    The outgoing messages from VariableGNNLayer are "variable-to-check" messages.
-    
-    This implementation works with raw LLR values in the first dimension of the feature vector.
+    Combines scalar LLR operations with message type-specific weights.
     """
     
-    def __init__(self, num_message_types=1, hidden_dim=64):
+    def __init__(self, num_message_types=1, hidden_dim=16, use_bp_op=True):
         super().__init__()
         
-        # Message type specific embeddings
-        self.message_type_embeddings = nn.Parameter(torch.randn(num_message_types, hidden_dim))
+        self.use_bp_op = use_bp_op
+        self.hidden_dim = hidden_dim
         
-        # Neural network for variable-to-check update
-        self.var_update = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
+        # Message type specific weights for scalar operations
+        self.message_type_weights = nn.Parameter(torch.ones(num_message_types))
         
-        # Output projection
+        # Output projection (for backward compatibility)
         self.output_projection = nn.Linear(hidden_dim, 1)
     
-    def forward(self, copied_llr, var_messages, check_messages, message_types, var_to_check_adjacency):
-        """
-        Forward pass of the Variable GNN Layer.
+    def bp_variable_update(self, copied_llr, check_messages, message_types, var_to_check_adjacency):
+        """Traditional BP variable node operation with type-specific weights"""
+        # Project high-dim features back to LLR domain if needed
+        if check_messages.size(-1) > 1:
+            check_llrs = self.output_projection(check_messages).squeeze(-1)  # (batch_size, num_messages)
+        else:
+            check_llrs = check_messages.squeeze(-1)
         
-        Args:
-            copied_llr (torch.Tensor): Copied original input LLR values into message features
-            var_messages (torch.Tensor): Variable-side message features
-            check_messages (torch.Tensor): Check-side message features
-            message_types (torch.Tensor): Type indices for each message
-            var_to_check_adjacency (torch.Tensor): Adjacency matrix for variable connections
-            
-        Returns:
-            torch.Tensor: Updated variable-side message features
-        """
-        # batch_size, num_messages, hidden_dim = var_messages.shape
-        # device = var_messages.device
+        # Get type-specific weights for each message
+        safe_message_types = torch.clamp(message_types, 0, len(self.message_type_weights) - 1)
+        type_weights = self.message_type_weights[safe_message_types]  # (num_messages,)
         
-        # Ensure message_types are valid indices
-        safe_message_types = torch.clamp(message_types, 0, self.message_type_embeddings.shape[0] - 1)
+        # Apply type weights to messages
+        weighted_check_llrs = check_llrs * type_weights.unsqueeze(0)  # (batch_size, num_messages)
         
-        # Get embeddings for each message type
-        type_embeddings = self.message_type_embeddings[safe_message_types]  # (num_messages, hidden_dim)
+        # Expand adjacency matrix for batch processing
+        # Shape: (batch_size, num_messages, num_messages)
+        batch_adj = var_to_check_adjacency.unsqueeze(0).expand(weighted_check_llrs.size(0), -1, -1)
         
-        # Add type embeddings to message features
-        messages_with_types = var_messages + type_embeddings.unsqueeze(0)  # (batch_size, num_messages, hidden_dim)
+        # Sum messages from connected check nodes
+        # Shape: (batch_size, num_messages)
+        aggregated_llrs = torch.bmm(batch_adj, weighted_check_llrs.unsqueeze(-1)).squeeze(-1)
         
-        # Variable-to-check message update
-        # Gather messages from variables sharing the same check node
-        aggregated_messages = torch.matmul(var_to_check_adjacency, messages_with_types)
+        # Add channel LLR
+        updated_llrs = copied_llr.squeeze(-1) + aggregated_llrs
         
-        # Combine with check messages from previous iteration's check_to_variable messages layer
-        update_input = torch.cat([aggregated_messages, check_messages], dim=2)
-        updated_var_messages = self.var_update(update_input) + copied_llr
-        
-        return updated_var_messages
+        # Keep in scalar domain
+        return updated_llrs.unsqueeze(-1)
     
-    def decode_messages(self, message_features):
-        """Decode message features to LLR values."""
-        return self.output_projection(message_features).squeeze(-1)
+    def forward(self, copied_llr, var_messages, check_messages, message_types, var_to_check_adjacency):
+        """Forward pass using scalar operations with type-specific weights"""
+        return self.bp_variable_update(copied_llr, check_messages, message_types, var_to_check_adjacency)
 
 
 class CheckGNNLayer(nn.Module):
     """
     Check-side GNN layer for alternating message passing in LDPC decoding.
-    
-    This layer updates messages based on their connections through check nodes.
+    Combines min-sum operations with message type-specific weights.
     """
     
-    def __init__(self, num_message_types=1, hidden_dim=64):
+    def __init__(self, num_message_types=1, hidden_dim=16, use_bp_op=True):
         super().__init__()
         
-        # Message type specific embeddings
-        self.message_type_embeddings = nn.Parameter(torch.randn(num_message_types, hidden_dim))
+        self.use_bp_op = use_bp_op
+        self.hidden_dim = hidden_dim
         
-        # Neural network for check-to-variable update
-        self.check_update = nn.Sequential(
-            nn.Linear(hidden_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
-        )
+        # Message type specific weights for scalar operations
+        self.message_type_weights = nn.Parameter(torch.ones(num_message_types))
         
-        # Output projection
+        # Output projection (for backward compatibility)
         self.output_projection = nn.Linear(hidden_dim, 1)
     
-    def forward(self, check_messages, var_messages, message_types, check_to_var_adjacency):
-        """
-        Forward pass of the Check GNN Layer.
+    def min_sum_update(self, var_messages, message_types, check_to_var_adjacency):
+        """Min-sum check node operation with type-specific weights"""
+        # Project high-dim features back to LLR domain if needed
+        if var_messages.size(-1) > 1:
+            var_llrs = self.output_projection(var_messages).squeeze(-1)  # (batch_size, num_messages)
+        else:
+            var_llrs = var_messages.squeeze(-1)
         
-        Args:
-            check_messages (torch.Tensor): Check-side message features
-            var_messages (torch.Tensor): Variable-side message features
-            message_types (torch.Tensor): Type indices for each message
-            check_to_var_adjacency (torch.Tensor): Adjacency matrix for check connections
-            
-        Returns:
-            torch.Tensor: Updated check-side message features
-        """
-        batch_size, num_messages, hidden_dim = check_messages.shape
-        device = check_messages.device
+        # Get type-specific weights for each message
+        safe_message_types = torch.clamp(message_types, 0, len(self.message_type_weights) - 1)
+        type_weights = self.message_type_weights[safe_message_types]  # (num_messages,)
         
-        # Ensure message_types are valid indices
-        safe_message_types = torch.clamp(message_types, 0, self.message_type_embeddings.shape[0] - 1)
+        # Apply type weights to messages
+        weighted_var_llrs = var_llrs * type_weights.unsqueeze(0)  # (batch_size, num_messages)
         
-        # Get embeddings for each message type
-        type_embeddings = self.message_type_embeddings[safe_message_types]  # (num_messages, hidden_dim)
+        # Get signs and magnitudes
+        signs = torch.sign(weighted_var_llrs)  # (batch_size, num_messages)
+        magnitudes = torch.abs(weighted_var_llrs)  # (batch_size, num_messages)
         
-        # Add type embeddings to message features
-        messages_with_types = check_messages + type_embeddings.unsqueeze(0)  # (batch_size, num_messages, hidden_dim)
+        # For each check node, gather connected messages and find minimum magnitude
+        # Using matrix multiplication for batch processing
+        # check_to_var_adjacency shape: (num_messages, num_messages)
+        # magnitudes shape: (batch_size, num_messages)
         
-        # Check-to-variable message update
-        # Gather messages from checks sharing the same variable node
-        aggregated_messages = torch.matmul(check_to_var_adjacency, messages_with_types)
+        # Expand adjacency matrix for batch processing
+        # Shape: (batch_size, num_messages, num_messages)
+        batch_adj = check_to_var_adjacency.unsqueeze(0).expand(weighted_var_llrs.size(0), -1, -1)
         
-        # Combine with variable messages
-        update_input = torch.cat([messages_with_types, var_messages], dim=2)
-        updated_check_messages = self.check_update(update_input)
+        # Get connected magnitudes for each message in the batch
+        # Shape: (batch_size, num_messages, num_messages)
+        connected_magnitudes = magnitudes.unsqueeze(2) * batch_adj
         
-        return updated_check_messages
+        # Replace zeros with large value for min operation
+        masked_magnitudes = torch.where(connected_magnitudes == 0, 
+                                      torch.tensor(1e10, device=var_llrs.device), 
+                                      connected_magnitudes)
+        
+        # Find minimum magnitude for each message (excluding self)
+        # Shape: (batch_size, num_messages)
+        min_magnitudes = masked_magnitudes.min(dim=1)[0]
+        
+        # Compute sign products for each message in the batch
+        # Shape: (batch_size, num_messages, num_messages)
+        sign_matrix = signs.unsqueeze(2) * batch_adj
+        # Replace zeros with ones so they don't affect the product
+        sign_matrix = torch.where(batch_adj == 0, torch.tensor(1.0, device=var_llrs.device), sign_matrix)
+        # Compute product along the message dimension
+        # Shape: (batch_size, num_messages)
+        sign_products = torch.prod(sign_matrix, dim=1)
+        
+        # Combine signs and magnitudes
+        # Shape: (batch_size, num_messages)
+        updated_llrs = sign_products * min_magnitudes
+        
+        # Keep in scalar domain
+        # Shape: (batch_size, num_messages, 1)
+        return updated_llrs.unsqueeze(-1)
     
-    def decode_messages(self, message_features):
-        """Decode message features to LLR values."""
-        return self.output_projection(message_features).squeeze(-1)
+    def forward(self, check_messages, var_messages, message_types, check_to_var_adjacency):
+        """Forward pass using scalar operations with type-specific weights"""
+        return self.min_sum_update(var_messages, message_types, check_to_var_adjacency)
 
 
 class MessageGNNDecoder(nn.Module):
@@ -162,7 +164,7 @@ class MessageGNNDecoder(nn.Module):
     The graph structure is defined by the Tanner graph of the LDPC code.
     """
     
-    def __init__(self, num_messages, num_iterations=5, hidden_dim=64, num_message_types=1, num_of_residual_layers=2):
+    def __init__(self, num_messages, num_iterations=5, hidden_dim=16, num_message_types=1, num_of_residual_layers=2):
         super().__init__()
         
         self.num_messages = num_messages
@@ -171,41 +173,33 @@ class MessageGNNDecoder(nn.Module):
         self.num_message_types = num_message_types
         self.num_of_residual_layers = num_of_residual_layers
         
-        # Modify Variable-side GNN layers to work with scalar inputs
+        # Variable-side GNN layers (scalar operations)
         self.var_gnn_layers = nn.ModuleList([
-            VariableGNNLayer(num_message_types, hidden_dim)
+            VariableGNNLayer(num_message_types, hidden_dim=1, use_bp_op=True)  # Use hidden_dim=1 for scalar operations
             for _ in range(num_iterations)
         ])
         
-        # Check-side GNN layers
+        # Check-side GNN layers (scalar operations)
         self.check_gnn_layers = nn.ModuleList([
-            CheckGNNLayer(num_message_types, hidden_dim)
+            CheckGNNLayer(num_message_types, hidden_dim=1, use_bp_op=True)  # Use hidden_dim=1 for scalar operations
             for _ in range(num_iterations)
         ])
         
-        # Layer normalization for stabilizing training
+        # Layer normalization for stabilizing training (operating on scalar values)
         self.var_layer_norms = nn.ModuleList([
-            nn.LayerNorm(hidden_dim)
+            nn.LayerNorm(1)  # Normalize scalar values
             for _ in range(num_iterations)
         ])
         
         self.check_layer_norms = nn.ModuleList([
-            nn.LayerNorm(hidden_dim)
+            nn.LayerNorm(1)  # Normalize scalar values
             for _ in range(num_iterations)
         ])
-        
-        # Final projection to scalar LLR (non-trainable)
-        self.output_projection = nn.Linear(hidden_dim, 1, bias=False)
-        # Initialize to average over hidden dimensions
-        with torch.no_grad():
-            self.output_projection.weight.fill_(1.0 / hidden_dim)
-        # Freeze the output projection
-        self.output_projection.weight.requires_grad = False
         
         print(f"\nModel Configuration:")
         print(f"Number of messages: {num_messages}")
         print(f"Number of iterations: {num_iterations}")
-        print(f"Hidden dimension: {hidden_dim}")
+        print(f"Using scalar operations with type-specific weights")
         print(f"Number of message types: {num_message_types}")
         print(f"Number of residual layers: {num_of_residual_layers}")
         print(f"Total trainable parameters: {self.count_parameters():,}")
@@ -233,15 +227,14 @@ class MessageGNNDecoder(nn.Module):
         Returns:
             Tensor of shape [batch_size, num_vars] containing probabilities for each bit
         """
-        # Project messages to scalar LLRs (parameter-free)
-        message_llrs = self.output_projection(final_messages).squeeze(-1)
+        # Messages are already in scalar form, no need for projection
+        message_llrs = final_messages.squeeze(-1)  # (batch_size, num_messages)
         
         # Initialize output probabilities
         output_probs = torch.zeros(batch_size, num_vars, device=input_llr.device)
         
         # Combine messages for each variable node
         for b in range(batch_size):
-            # Initialize LLRs for each variable node
             var_llrs = torch.zeros(num_vars, device=input_llr.device)
             
             # Sum messages going to each variable node
@@ -249,7 +242,7 @@ class MessageGNNDecoder(nn.Module):
                 var_idx = message_to_var_mapping[msg_idx, 0].item() if len(message_to_var_mapping.shape) > 1 else message_to_var_mapping[msg_idx].item()
                 var_llrs[var_idx] += message_llrs[b, msg_idx]
             
-            # Add original input LLRs (log domain addition = probability domain multiplication)
+            # Add original input LLRs
             combined_llrs = var_llrs + input_llr[b]
             
             # Convert to probabilities using sigmoid
@@ -264,11 +257,8 @@ class MessageGNNDecoder(nn.Module):
         Uses residual connections in variable layers by combining:
         1. check-to-var messages from previous check layer
         2. previous var-to-check messages from the queue
+        All operations are performed in scalar domain with type-specific weights.
         """
-        print("\n===== Input LLR Information =====")
-        print(f"Input LLR shape: {input_llr.shape}")
-        print("===============================\n")
-        
         # Validate input shape
         if len(input_llr.shape) != 2:
             raise ValueError(f"Expected input_llr to be a 2D tensor (batch_size × num_vars), got shape {input_llr.shape}")
@@ -284,9 +274,9 @@ class MessageGNNDecoder(nn.Module):
             var_indices = message_to_var_mapping[:, 0] if len(message_to_var_mapping.shape) > 1 else message_to_var_mapping[b]
             message_llrs[b] = input_llr[b][var_indices]
         
-        # Transform scalar LLRs into feature vectors
-        var_message_features = self.input_embedding(message_llrs.unsqueeze(-1))
-        check_message_features = torch.zeros_like(var_message_features)
+        # Keep messages in scalar domain
+        var_message_features = message_llrs.unsqueeze(-1)  # shape: (batch_size, num_messages, 1)
+        check_message_features = torch.zeros_like(var_message_features)  # shape: (batch_size, num_messages, 1)
         
         # Default message types if not provided
         if message_types is None:
@@ -299,53 +289,47 @@ class MessageGNNDecoder(nn.Module):
             check_to_var_adjacency = torch.eye(self.num_messages, device=input_llr.device)
         
         # Queue to store previous var-to-check messages
-        var_to_check_queue = []
-        
+        residual_queue = []
+
         # Iterative message passing
         for i in range(self.num_iterations):
-            print(f"\n----- Iteration {i+1}/{self.num_iterations} -----")
-            
             # 1. Variable-to-Check Update
-            # Combine:
-            # a) check-to-var messages from previous check layer
-            # b) previous var-to-check messages from queue if available
             var_input = var_message_features
             
-            # Apply variable GNN layer
+            # Apply variable GNN layer (scalar operations)
             updated_var_features = self.var_gnn_layers[i](
                 var_input,
-                check_message_features,  # check-to-var messages from previous check layer
+                var_message_features,
+                check_message_features,
                 message_types,
                 var_to_check_adjacency
             )
             
             # Add residual connections from previous var-to-check messages
-            if i >= self.num_of_residual_layers and var_to_check_queue:
-                for prev_var_to_check in var_to_check_queue:
+            if i >= self.num_of_residual_layers and residual_queue:
+                for prev_var_to_check in residual_queue:
                     updated_var_features = updated_var_features + prev_var_to_check
-                print(f"Added residual connections from {len(var_to_check_queue)} previous var-to-check messages")
             
-            # Apply layer norm
+            # Apply layer norm (on scalar values)
             var_message_features = self.var_layer_norms[i](updated_var_features)
             
             # Update queue with current var-to-check messages
-            var_to_check_queue.append(var_message_features.clone())
-            if len(var_to_check_queue) > self.num_of_residual_layers:
-                var_to_check_queue.pop(0)
+            residual_queue.append(var_message_features.clone())
+            if len(residual_queue) > self.num_of_residual_layers:
+                residual_queue.pop(0)
             
-            # 2. Check-to-Variable Update
-            # Apply check GNN layer using updated var-to-check messages
+            # 2. Check-to-Variable Update (scalar operations)
             updated_check_features = self.check_gnn_layers[i](
                 check_message_features,
-                var_message_features,  # using the updated var-to-check messages
+                var_message_features,
                 message_types,
                 check_to_var_adjacency
             )
             
-            # Apply layer norm
+            # Apply layer norm (on scalar values)
             check_message_features = self.check_layer_norms[i](updated_check_features)
         
-        # Final decoding using parameter-free output mapping
+        # Final decoding using scalar messages
         return self.output_mapping(
             final_messages=check_message_features,
             message_to_var_mapping=message_to_var_mapping,
@@ -556,7 +540,7 @@ class TannerToMessageGraph:
         return torch.tensor(all_indices, dtype=torch.long), torch.tensor(offsets, dtype=torch.long)
 
 
-def create_message_gnn_decoder(H, base_graph=None, lifting_factor=None, num_iterations=5, hidden_dim=64, num_of_residual_layers=2):
+def create_message_gnn_decoder(H, base_graph=None, lifting_factor=None, num_iterations=5, hidden_dim=16, num_of_residual_layers=2):
     """
     Create a Message GNN Decoder based on a parity-check matrix and optionally a base graph.
     
