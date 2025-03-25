@@ -101,7 +101,7 @@ def test_message_gnn_decoder():
     # Parameters
     batch_size = 3
     num_iterations = 3
-    hidden_dim = 32
+    hidden_dim = 1  # Using scalar operations
     num_of_residual_layers = 1
     
     try:
@@ -109,14 +109,14 @@ def test_message_gnn_decoder():
         decoder, converter = create_message_gnn_decoder(
             H, 
             num_iterations=num_iterations,
-            hidden_dim=hidden_dim,
+            hidden_dim=hidden_dim,  # Using scalar operations
             num_of_residual_layers=num_of_residual_layers
         )
         
-        print(f"Created MessageGNNDecoder with parameters:")
+        print(f"\nCreated MessageGNNDecoder with parameters:")
         print(f"  num_messages: {converter.num_messages}")
         print(f"  num_iterations: {num_iterations}")
-        print(f"  hidden_dim: {hidden_dim}")
+        print(f"  Using scalar operations")
         print(f"  num_message_types: {decoder.num_message_types}")
         print(f"  num_of_residual_layers: {num_of_residual_layers}")
         print(f"Trainable parameters: {decoder.count_parameters():,}")
@@ -156,7 +156,46 @@ def test_message_gnn_decoder():
         print(f"\nBit match rate: {matches:.2%}")
         
         # Plot results
-        plot_decoding_results(input_llr, output_probs)
+        plt.figure(figsize=(12, 8))
+        
+        # Plot input LLRs
+        plt.subplot(3, 1, 1)
+        for i in range(min(3, batch_size)):
+            plt.plot(input_llr[i].detach().numpy(), label=f'Sample {i}')
+        plt.title("Input LLR Values")
+        plt.xlabel("Variable node index")
+        plt.ylabel("LLR")
+        plt.grid(True)
+        plt.legend()
+        
+        # Plot output probabilities
+        plt.subplot(3, 1, 2)
+        for i in range(min(3, batch_size)):
+            plt.plot(output_probs[i].detach().numpy(), label=f'Sample {i}')
+        plt.axhline(y=0.5, color='r', linestyle='--', alpha=0.5)
+        plt.title("Output Probabilities")
+        plt.xlabel("Variable node index")
+        plt.ylabel("Probability")
+        plt.grid(True)
+        plt.legend()
+        
+        # Plot message type weights
+        plt.subplot(3, 1, 3)
+        weights = []
+        for layer_idx in range(num_iterations):
+            var_weights = decoder.var_gnn_layers[layer_idx].message_type_weights.detach().numpy()
+            check_weights = decoder.check_gnn_layers[layer_idx].message_type_weights.detach().numpy()
+            weights.extend([var_weights, check_weights])
+        
+        plt.imshow(np.array(weights), aspect='auto')
+        plt.colorbar(label='Weight value')
+        plt.title("Message Type Weights")
+        plt.xlabel("Message type")
+        plt.ylabel("Layer (odd=var, even=check)")
+        
+        plt.tight_layout()
+        plt.savefig("message_gnn_decoder_test.png")
+        print(f"\nDecoding results visualization saved to message_gnn_decoder_test.png")
         
         print("\nTest passed successfully!")
         return True

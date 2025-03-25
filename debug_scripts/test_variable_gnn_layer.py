@@ -31,18 +31,17 @@ def test_variable_gnn_layer():
     # Parameters
     batch_size = 2
     num_messages = 10
-    hidden_dim = 16
     num_message_types = 2
     
-    # Initialize layer
-    var_gnn_layer = VariableGNNLayer(num_message_types=num_message_types, hidden_dim=hidden_dim)
-    print(f"Initialized VariableGNNLayer with hidden_dim={hidden_dim}, num_message_types={num_message_types}")
+    # Initialize layer with scalar operations
+    var_gnn_layer = VariableGNNLayer(num_message_types=num_message_types, hidden_dim=1, use_bp_op=True)
+    print(f"Initialized VariableGNNLayer with scalar operations and {num_message_types} message types")
     
-    # Create dummy inputs
-    copied_llr = torch.randn(batch_size, num_messages, hidden_dim)
-    var_messages = torch.randn(batch_size, num_messages, hidden_dim)
-    check_messages = torch.randn(batch_size, num_messages, hidden_dim)
-    message_types = torch.randint(0, num_message_types, (num_messages,))
+    # Create dummy inputs (all in scalar domain)
+    copied_llr = torch.randn(batch_size, num_messages, 1)  # Channel LLRs
+    var_messages = torch.randn(batch_size, num_messages, 1)  # Variable messages
+    check_messages = torch.randn(batch_size, num_messages, 1)  # Check messages
+    message_types = torch.randint(0, num_message_types, (num_messages,))  # Message types
     
     # Create dummy adjacency matrix (each message connected to 3 others)
     var_to_check_adjacency = torch.zeros(num_messages, num_messages)
@@ -55,7 +54,7 @@ def test_variable_gnn_layer():
         )
         var_to_check_adjacency[i, connections] = 1.0
     
-    print(f"Input shapes:")
+    print(f"\nInput shapes:")
     print(f"  copied_llr: {copied_llr.shape}")
     print(f"  var_messages: {var_messages.shape}")
     print(f"  check_messages: {check_messages.shape}")
@@ -71,35 +70,39 @@ def test_variable_gnn_layer():
             message_types, 
             var_to_check_adjacency
         )
-        print(f"Forward pass successful!")
+        print(f"\nForward pass successful!")
         print(f"Output shape: {updated_var_messages.shape}")
         
-        # Test decode_messages
-        decoded_llr = var_gnn_layer.decode_messages(updated_var_messages)
-        print(f"Decoded LLR shape: {decoded_llr.shape}")
-        
-        # Plot some message features before and after update
+        # Plot message values before and after update
         plt.figure(figsize=(12, 6))
         
-        # Plot original message features
+        # Plot original messages
         plt.subplot(1, 2, 1)
-        plt.imshow(var_messages[0, :5, :].detach().numpy())
-        plt.colorbar()
-        plt.title("Original message features (first 5 messages)")
-        plt.xlabel("Hidden dimension")
-        plt.ylabel("Message index")
+        plt.plot(var_messages[0, :, 0].detach().numpy(), 'b-', label='Original')
+        plt.plot(check_messages[0, :, 0].detach().numpy(), 'r--', label='Check')
+        plt.plot(copied_llr[0, :, 0].detach().numpy(), 'g:', label='Channel')
+        plt.title("Original Messages (first batch)")
+        plt.xlabel("Message index")
+        plt.ylabel("LLR value")
+        plt.legend()
+        plt.grid(True)
         
-        # Plot updated message features
+        # Plot updated messages
         plt.subplot(1, 2, 2)
-        plt.imshow(updated_var_messages[0, :5, :].detach().numpy())
-        plt.colorbar()
-        plt.title("Updated message features (first 5 messages)")
-        plt.xlabel("Hidden dimension")
-        plt.ylabel("Message index")
+        plt.plot(updated_var_messages[0, :, 0].detach().numpy(), 'b-', label='Updated')
+        plt.title("Updated Messages (first batch)")
+        plt.xlabel("Message index")
+        plt.ylabel("LLR value")
+        plt.legend()
+        plt.grid(True)
         
         plt.tight_layout()
         plt.savefig("variable_gnn_layer_test.png")
         print(f"Plot saved to variable_gnn_layer_test.png")
+        
+        # Print learned weights
+        print(f"\nLearned message type weights:")
+        print(var_gnn_layer.message_type_weights.data)
         
         print("\nTest passed successfully!")
         return True
