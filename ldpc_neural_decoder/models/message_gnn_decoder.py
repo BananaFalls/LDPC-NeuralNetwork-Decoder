@@ -12,6 +12,43 @@ import torch.nn.functional as F
 import numpy as np
 
 
+def get_llr_from_noise(noise_std, received_symbols):
+    """
+    Convert received QPSK symbols to LLR values based on noise standard deviation.
+    
+    Args:
+        noise_std: Standard deviation of the AWGN noise
+        received_symbols: Received QPSK symbols
+        
+    Returns:
+        LLR values for each bit
+    """
+    # Calculate variance from standard deviation
+    noise_var = noise_std ** 2
+    
+    # For QPSK modulation (assuming Gray coding)
+    # LLR for bit i = (4 * r_i) / (2 * noise_var)
+    # where r_i is the real or imaginary part of the received symbol
+    
+    # Extract real and imaginary parts
+    real_parts = received_symbols.real
+    imag_parts = received_symbols.imag
+    
+    # Calculate LLRs
+    # First bit is determined by real part, second bit by imaginary part
+    llr_values = torch.zeros(received_symbols.shape[0], 2 * received_symbols.shape[1], 
+                           device=received_symbols.device)
+    
+    # Fill LLRs - real parts determine even indices, imaginary parts determine odd indices
+    for i in range(received_symbols.shape[1]):
+        # LLR for first bit
+        llr_values[:, 2*i] = 2 * real_parts[:, i] / noise_var
+        # LLR for second bit
+        llr_values[:, 2*i+1] = 2 * imag_parts[:, i] / noise_var
+    
+    return llr_values
+
+
 def safe_index(tensor, idx):
     """
     Helper function for safe indexing when some indices might be -1 (indicating padding)

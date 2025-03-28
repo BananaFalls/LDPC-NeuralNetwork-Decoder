@@ -1,47 +1,44 @@
 import torch
 import numpy as np
-from ldpc_neural_decoder.utils.channel import qpsk_modulate, awgn_channel, qpsk_demodulate
+from ldpc_neural_decoder.utils.channel import bpsk_modulate, awgn_channel, bpsk_demodulate
 
 # Set random seed
 torch.manual_seed(42)
 
 # 1. Create test data
-print("=== QPSK Modulation/Demodulation Debug ===")
+print("=== BPSK Modulation/Demodulation Debug ===")
 print("\n1. Creating test data")
 
-# Create 4 test patterns to test all possible bit combinations (00, 01, 10, 11)
+# Create test patterns to test bit values (0, 1)
 bits = torch.tensor([
-    [0, 0, 0, 1, 1, 0, 1, 1],  # Contains all 4 possible bit pairs
-    [0, 0, 0, 0, 0, 0, 0, 0],  # All zeros (all 00 pairs)
+    [0, 0, 1, 1, 0, 1, 0, 1],  # Contains both bit values
+    [0, 0, 0, 0, 0, 0, 0, 0],  # All zeros
 ], dtype=torch.float)
 
 print(f"Bits shape: {bits.shape}")
 print(f"Bits (row 1): {bits[0]}")
 print(f"Bits (row 2): {bits[1]}")
 
-# 2. QPSK Modulation
-print("\n2. QPSK Modulation")
-symbols = qpsk_modulate(bits)
+# 2. BPSK Modulation
+print("\n2. BPSK Modulation")
+symbols = bpsk_modulate(bits)
 print(f"Symbols shape: {symbols.shape}")
 print(f"Symbols (row 1): {symbols[0]}")
 print(f"Symbols (row 2): {symbols[1]}")
 
-# Check mapping for each possible bit pair
-print("\nVerifying bit pair to symbol mapping:")
-norm_factor = 1/np.sqrt(2)
+# Check mapping for each possible bit value
+print("\nVerifying bit to symbol mapping:")
 expected_mapping = {
-    (0, 0): complex(norm_factor, norm_factor),    # 00 -> (1+j)/√2
-    (0, 1): complex(norm_factor, -norm_factor),   # 01 -> (1-j)/√2
-    (1, 0): complex(-norm_factor, norm_factor),   # 10 -> (-1+j)/√2
-    (1, 1): complex(-norm_factor, -norm_factor),  # 11 -> (-1-j)/√2
+    0: complex(1.0, 0.0),     # 0 -> +1+0j
+    1: complex(-1.0, 0.0),    # 1 -> -1+0j
 }
 
-for i in range(4):  # Check first 4 bit pairs in row 1
-    bit_pair = (int(bits[0, i*2]), int(bits[0, i*2+1]))
+for i in range(4):  # Check first 4 bits in row 1
+    bit = int(bits[0, i])
     symbol = symbols[0, i]
-    expected = expected_mapping.get(bit_pair, "unknown")
+    expected = expected_mapping.get(bit, "unknown")
     match = "✓" if abs(symbol - expected) < 1e-6 else "✗"
-    print(f"Bit pair {bit_pair} -> Symbol {symbol:.6f} (Expected: {expected:.6f}) {match}")
+    print(f"Bit {bit} -> Symbol {symbol:.6f} (Expected: {expected:.6f}) {match}")
 
 # Verify symbol power (should be 1.0)
 symbol_power = torch.mean(torch.abs(symbols)**2).item()
@@ -73,9 +70,9 @@ for snr in snr_values:
     # Use last generated noisy symbols for demodulation
     print(f"Sample noisy symbols: {noisy_symbols[0, :2]}")
     
-    # 4. QPSK Demodulation
-    print(f"\n4. QPSK Demodulation (SNR = {snr} dB)")
-    llrs = qpsk_demodulate(noisy_symbols, snr)
+    # 4. BPSK Demodulation
+    print(f"\n4. BPSK Demodulation (SNR = {snr} dB)")
+    llrs = bpsk_demodulate(noisy_symbols, snr)
     print(f"LLR shape: {llrs.shape}")
     print(f"First few LLRs (row 1): {llrs[0, :8]}")
     
@@ -107,18 +104,16 @@ for snr in snr_values:
             for j in range(bits.shape[1]):
                 if bits[i, j] != hard_bits[i, j]:
                     print(f"Error at row {i}, bit {j}: Original {int(bits[i,j])}, Decoded {int(hard_bits[i,j])}")
-                    if j % 2 == 0 and j+1 < bits.shape[1]:  # If this is the first bit of a pair
-                        bit_pair = (int(bits[i, j]), int(bits[i, j+1]))
-                        symbol_idx = j // 2
-                        print(f"  Bit pair: {bit_pair}, Symbol: {symbols[i, symbol_idx]}")
-                        print(f"  Noisy symbol: {noisy_symbols[i, symbol_idx]}")
-                        print(f"  LLRs: [{llrs[i, j]:.2f}, {llrs[i, j+1]:.2f}]")
+                    print(f"  Original bit: {int(bits[i,j])}")
+                    print(f"  Symbol: {symbols[i, j]}")
+                    print(f"  Noisy symbol: {noisy_symbols[i, j]}")
+                    print(f"  LLR: {llrs[i, j]:.2f}")
 
 # Test with a very high SNR (should have no errors)
 print("\n6. High SNR Test (SNR = 20 dB)")
 high_snr = 20
 noisy_symbols_clean = awgn_channel(symbols, high_snr)
-llrs_clean = qpsk_demodulate(noisy_symbols_clean, high_snr)
+llrs_clean = bpsk_demodulate(noisy_symbols_clean, high_snr)
 hard_bits_clean = (llrs_clean < 0).float()
 bit_errors_clean = (hard_bits_clean != bits).sum().item()
 print(f"Bit errors at {high_snr}dB: {bit_errors_clean} out of {bits.numel()}")

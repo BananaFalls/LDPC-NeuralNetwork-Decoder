@@ -1,6 +1,56 @@
 import torch
 import numpy as np
 
+def bpsk_modulate(bits):
+    """
+    Modulate binary bits using BPSK.
+    
+    Args:
+        bits (torch.Tensor): Binary bits (0s and 1s) to modulate. Can be of shape (batch_size, n_bits)
+                            or just (n_bits,)
+        
+    Returns:
+        torch.Tensor: Real BPSK symbols of shape (batch_size, n_bits) or (n_bits,)
+    """
+    # Save original shape and device
+    original_shape = bits.shape
+    device = bits.device
+    is_batched = len(original_shape) > 1
+    
+    if is_batched:
+        batch_size = original_shape[0]
+        n_bits = original_shape[1]
+        # Reshape to (batch_size, n_bits)
+        bits = bits.reshape(batch_size, n_bits)
+    else:
+        batch_size = 1
+        n_bits = original_shape[0]
+        # Add batch dimension
+        bits = bits.reshape(1, n_bits)
+    
+    # Process each batch
+    bpsk_symbols_list = []
+    
+    for i in range(batch_size):
+        # Get bits for this batch
+        batch_bits = bits[i]
+        
+        # Map 0 -> +1, 1 -> -1
+        symbols = 1.0 - 2.0 * batch_bits.float()
+        
+        # Convert to complex format for compatibility with existing channel functions
+        batch_bpsk_symbols = torch.complex(symbols, torch.zeros_like(symbols))
+        bpsk_symbols_list.append(batch_bpsk_symbols)
+    
+    # Stack batches
+    bpsk_symbols = torch.stack(bpsk_symbols_list)
+    
+    # Remove batch dimension if input wasn't batched
+    if not is_batched:
+        bpsk_symbols = bpsk_symbols.squeeze(0)
+    
+    return bpsk_symbols
+
 def qpsk_modulate(bits):
     """
     Modulate binary bits using QPSK.
@@ -86,6 +136,66 @@ def awgn_channel(symbols, snr_db):
     received_symbols = symbols + noise
     
     return received_symbols
+
+def bpsk_demodulate(received_symbols, snr_db):
+    """
+    Demodulate received BPSK symbols to LLRs.
+    
+    Args:
+        received_symbols (torch.Tensor): Received complex symbols. Can be of shape (batch_size, n_symbols)
+                                        or just (n_symbols,)
+        snr_db (float): Signal-to-Noise Ratio in dB
+        
+    Returns:
+        torch.Tensor: Log-Likelihood Ratios (LLRs) with shape (batch_size, n_symbols) or (n_symbols,)
+    """
+    # Save original shape and device
+    original_shape = received_symbols.shape
+    device = received_symbols.device
+    is_batched = len(original_shape) > 1
+    
+    if is_batched:
+        batch_size = original_shape[0]
+        n_symbols = original_shape[1]
+        # Ensure shape is (batch_size, n_symbols)
+        received_symbols = received_symbols.reshape(batch_size, n_symbols)
+    else:
+        batch_size = 1
+        n_symbols = original_shape[0]
+        # Add batch dimension
+        received_symbols = received_symbols.reshape(1, n_symbols)
+    
+    # Convert SNR from dB to linear scale
+    snr_linear = 10 ** (snr_db / 10)
+    
+    # Calculate noise variance
+    noise_var = 1 / snr_linear
+    
+    # Process each batch
+    llrs_list = []
+    
+    for i in range(batch_size):
+        # Get symbols for this batch
+        batch_symbols = received_symbols[i]
+        
+        # Extract real part (BPSK only uses real part)
+        # Note: we're still compatible with complex input from the AWGN channel
+        real_part = batch_symbols.real
+        
+        # Calculate LLRs for real component
+        # LLR = 2*r/sigma^2 where r is the received signal and sigma^2 is the noise variance
+        llr = 2 * real_part / noise_var
+        
+        llrs_list.append(llr)
+    
+    # Stack batches
+    llrs = torch.stack(llrs_list)
+    
+    # Remove batch dimension if input wasn't batched
+    if not is_batched:
+        llrs = llrs.squeeze(0)
+    
+    return llrs
 
 def qpsk_demodulate(received_symbols, snr_db):
     """

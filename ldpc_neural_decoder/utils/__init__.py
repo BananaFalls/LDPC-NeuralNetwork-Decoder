@@ -12,8 +12,11 @@ from ldpc_neural_decoder.utils.ldpc_utils import (
 from ldpc_neural_decoder.utils.channel import (
     qpsk_modulate,
     qpsk_demodulate,
+    bpsk_modulate,
+    bpsk_demodulate,
     awgn_channel,
-    compute_ber_fer
+    compute_ber_fer,
+    generate_variable_snr_values
 )
 
 __all__ = [
@@ -23,6 +26,9 @@ __all__ = [
     'load_base_matrix',
     'qpsk_modulate',
     'qpsk_demodulate',
+    'bpsk_modulate',
+    'bpsk_demodulate',
     'awgn_channel',
-    'compute_ber_fer'
+    'compute_ber_fer',
+    'generate_variable_snr_values'
 ] 
