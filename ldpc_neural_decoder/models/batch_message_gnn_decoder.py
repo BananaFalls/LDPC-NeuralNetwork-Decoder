@@ -1,8 +1,8 @@
 import torch
 
-class SimpleMessageGNNDecoder:
+class BatchMessageGNNDecoder:
     """
-    A simplified version of the Message GNN Decoder without neural network components.
+    A batch-compatible version of the Message GNN Decoder without neural network components.
     Uses simple message passing with weights set to 1.
     """
     def __init__(self, H_matrix, num_iterations=3):
@@ -38,11 +38,9 @@ class SimpleMessageGNNDecoder:
         print("\n1. Variable-to-Check Message Creation:")
         print(f"Channel LLR values (batch {batch_idx}):\n{var_values[batch_idx]}")
         
-        print(f"[debug var_node_update 1] check_to_var_messages: {check_to_var_messages}")
         # Initialize output messages
         num_messages = int(self.H.sum().item())  # Total number of 1s in H matrix
         var_to_check_messages = torch.zeros((var_values.shape[0], num_messages), device=var_values.device)
-
 
         if check_to_var_messages is None:
             # First iteration: just use channel LLR
@@ -50,7 +48,7 @@ class SimpleMessageGNNDecoder:
             for var_idx in range(self.H.shape[1]):  # for each variable node
                 # Get all message indices for this variable
                 for msg_idx in self.var_to_messages[var_idx]:
-                    var_to_check_messages[batch_idx, msg_idx] = var_values[batch_idx, var_idx]
+                    var_to_check_messages[:, msg_idx] = var_values[:, var_idx]
                     
                     if msg_idx < 3:  # Only show first 3 messages
                         print(f"\nMessage {msg_idx} (from variable {var_idx}):")
@@ -60,11 +58,9 @@ class SimpleMessageGNNDecoder:
         # For each variable node
         for var_idx in range(self.H.shape[1]):
             # Get channel LLR (m_i)
-            channel_llr = var_values[batch_idx, var_idx]
+            channel_llr = var_values[:, var_idx].unsqueeze(-1)  # [batch_size, 1]
             
             connected_checks = torch.where(self.H[:, var_idx] == 1)[0]
-            # print(f"[debug 4] var_idx: {var_idx}")
-            # print(f"[debug 4] connected_checks: {connected_checks}")
 
             # For each connected check node j
             for target_check_idx in connected_checks:
@@ -75,41 +71,30 @@ class SimpleMessageGNNDecoder:
                 other_checks = connected_checks[connected_checks != target_check_idx]
                 other_msg_indices = []
                 for check_idx in other_checks:
-
                     # Find message index for this check-var pair
                     msg_idx = next(m for m in self.var_to_messages[var_idx]
                                  if m in self.check_to_messages[check_idx])
                     other_msg_indices.append(msg_idx)
-                    
-                # print(f"[debug 5] other_msg_indices: {other_msg_indices}")
+
                 # Get the messages we want to include 
-                messages_to_use = check_to_var_messages[batch_idx, other_msg_indices]
+                messages_to_use = check_to_var_messages[:, other_msg_indices]  # [batch_size, num_other_messages]
                 # Sum all messages except the target message
-                sum_messages = torch.sum(messages_to_use)
+                sum_messages = torch.sum(messages_to_use, dim=1, keepdim=True)  # [batch_size, 1]
 
                 # compute final message
-                var_to_check_messages[batch_idx, target_msg_idx] = channel_llr + sum_messages
+                var_to_check_messages[:, target_msg_idx] = channel_llr.squeeze(-1) + sum_messages.squeeze(-1)
                 
-               
-                
-                if msg_idx < 3:  # Only show first 3 messages
-                    print(f"\nMessage {msg_idx} (from variable {var_idx} to check {check_idx}):")
-                    print(f"Channel LLR: {channel_llr}")
-                    print(f"Sum of other check messages: {sum_messages}")
-                    print(f"Final message: {var_to_check_messages[batch_idx, msg_idx]}")
-
-        print(f"[debug var_node_update 2] var_to_check_messages: {var_to_check_messages}")
+                if target_msg_idx < 3:  # Only show first 3 messages
+                    print(f"\nMessage {target_msg_idx} (from variable {var_idx} to check {target_check_idx}):")
+                    print(f"Channel LLR: {channel_llr[batch_idx]}")
+                    print(f"Sum of other check messages: {sum_messages[batch_idx]}")
+                    print(f"Final message: {var_to_check_messages[batch_idx, target_msg_idx]}")
         
         return var_to_check_messages
 
     def check_node_update(self, var_to_check_messages, batch_idx):
         """
-        Check node update using min-sum approximation.
-        Following the equation:
-        m_{c,v}^{(j,i)}(t + 1) ≈ prod_{k in V_j, k!=i} sign[m_{v,c}^{(k,j)}(t)] × min_{k in V_j,k!=i} |m_{v,c}^{(k,j)}(t)|
-
-        Alternative (exact) update using tanh:
-        m_{c,v}^{(j,i)}(t + 1) = 2 * atanh(prod_{k in V_j, k!=i} tanh(m_{v,c}^{(k,j)}(t)/2))
+        Check node update using min-sum approximation or tanh-based update.
         """
         print("\n2. Check-to-Variable Message Creation:")
         check_to_var_messages = torch.zeros_like(var_to_check_messages)
@@ -135,88 +120,63 @@ class SimpleMessageGNNDecoder:
                     other_msg_indices.append(msg_idx)
                 
                 # Get the messages we want to include
-                messages_to_use = var_to_check_messages[batch_idx, other_msg_indices]
+                messages_to_use = var_to_check_messages[:, other_msg_indices]  # [batch_size, num_other_messages]
                 
                 if target_msg_idx < 3:  # Only show first 3 messages
                     print(f"\nCheck node {check_idx}, computing message to var {target_var_idx}:")
                     print(f"Connected variables: {connected_vars.tolist()}")
                     print(f"Other variables (excluding {target_var_idx}): {other_vars.tolist()}")
-                    print(f"Messages used: {messages_to_use}")
+                    print(f"Messages used: {messages_to_use[batch_idx]}")
                 
                 # OPTION 1: Min-sum approximation
-                # Compute sign product and minimum magnitude
-                # signs = torch.sign(messages_to_use)
-                # sign_product = torch.prod(signs)
-                # min_magnitude = torch.min(torch.abs(messages_to_use))
+                # signs = torch.sign(messages_to_use)  # [batch_size, num_other_messages]
+                # sign_product = torch.prod(signs, dim=1)  # [batch_size]
+                # min_magnitude = torch.min(torch.abs(messages_to_use), dim=1)[0]  # [batch_size]
+                # check_to_var_messages[:, target_msg_idx] = sign_product * min_magnitude
                 
-                # # Compute final message using min-sum
-                # check_to_var_messages[batch_idx, target_msg_idx] = sign_product * min_magnitude
+                # OPTION 2: Exact computation using tanh
+                prod_tanh = torch.prod(torch.tanh(messages_to_use / 2), dim=1)  # [batch_size]
+                check_to_var_messages[:, target_msg_idx] = 2 * torch.atanh(prod_tanh)
                 
-                # OPTION 2: Exact computation using tanh (commented out)
-                # Compute the product of tanh(m/2) for all other messages
-                prod_tanh = torch.prod(torch.tanh(messages_to_use / 2))
-                # Apply 2 * atanh to get the final message
-                check_to_var_messages[batch_idx, target_msg_idx] = 2 * torch.atanh(prod_tanh)
-                
-                # if target_msg_idx < 3:
-                #     print(f"Signs: {signs}")
-                #     print(f"Sign product: {sign_product}")
-                #     print(f"Minimum magnitude: {min_magnitude}")
-                #     print(f"Final message: {check_to_var_messages[batch_idx, target_msg_idx]}")
+                if target_msg_idx < 3:
+                    print(f"Final message: {check_to_var_messages[batch_idx, target_msg_idx]}")
         
-        print(f"[debug 1 check_node_update] check_to_var_messages: {check_to_var_messages}")
         return check_to_var_messages
-
 
     def compute_posterior_llr(self, input_llr, check_to_var_messages, batch_idx):
         """
-        Compute posterior LLR at the final iteration using:
+        Compute posterior LLR using:
         l_{D,i}(t + 1) = m_i + sum_{k in C_i} m_{c,v}^{(k,i)}(t + 1)
-        
-        Args:
-            input_llr: Channel LLR values (m_i)
-            check_to_var_messages: Messages from check nodes
-            batch_idx: Current batch index for printing
-            
-        Returns:
-            Final posterior LLR values
         """
-        print("\n=== Computing Final Posterior LLR ===")
+        print("\n=== Computing Posterior LLR ===")
         posterior_llr = input_llr.clone()
-        num_vars = input_llr.shape[1]
         
         # For each variable node i
-        for var_idx in range(num_vars):
+        for var_idx in range(self.H.shape[1]):
             # Get channel LLR (m_i)
-            channel_llr = input_llr[batch_idx, var_idx]
+            channel_llr = input_llr[:, var_idx].unsqueeze(-1)  # [batch_size, 1]
             
             connected_checks = torch.where(self.H[:, var_idx] == 1)[0]
-
             msg_indices = []
             for check_idx in connected_checks:
-
                 # Find message index for this check-var pair
                 msg_idx = next(m for m in self.var_to_messages[var_idx]
-                                if m in self.check_to_messages[check_idx])
+                             if m in self.check_to_messages[check_idx])
                 msg_indices.append(msg_idx)
-                
-            # print(f"[debug 5] other_msg_indices: {other_msg_indices}")
-            # Get the messages we want to include 
-            messages_to_use = check_to_var_messages[batch_idx, msg_indices]
-            # Sum all messages except the target message
-            sum_messages = torch.sum(messages_to_use)
-
-            # compute final message
-            posterior_llr[batch_idx, var_idx] = channel_llr + sum_messages
             
+            # Get all messages to this variable
+            messages_to_use = check_to_var_messages[:, msg_indices]  # [batch_size, num_messages]
+            # Sum all messages
+            sum_messages = torch.sum(messages_to_use, dim=1, keepdim=True)  # [batch_size, 1]
             
-            if msg_idx < 3:  # Only show first 3 messages
-                print(f"\nMessage {msg_idx} (from variable {var_idx} to check {check_idx}):")
-                print(f"Channel LLR: {channel_llr}")
-                print(f"Sum of other check messages: {sum_messages}")
-                print(f"Final message: {var_to_check_messages[batch_idx, msg_idx]}")
-
-        print(f"[compute_posterior_llr debug 1] posterior_llr: {posterior_llr}")
+            # Compute final posterior
+            posterior_llr[:, var_idx] = channel_llr.squeeze(-1) + sum_messages.squeeze(-1)
+            
+            if var_idx < 3:  # Show details for first 3 variables
+                print(f"\nVariable node {var_idx}:")
+                print(f"Channel LLR: {channel_llr[batch_idx]}")
+                print(f"Sum of check messages: {sum_messages[batch_idx]}")
+                print(f"Posterior LLR: {posterior_llr[batch_idx, var_idx]}")
         
         return posterior_llr
 
@@ -225,11 +185,11 @@ class SimpleMessageGNNDecoder:
         Forward pass of the decoder.
         
         Args:
-            input_llr (torch.Tensor): Initial LLR values for variable nodes
+            input_llr (torch.Tensor): Initial LLR values for variable nodes [batch_size, num_vars]
             ground_truth (torch.Tensor, optional): Ground truth for loss calculation
             
         Returns:
-            torch.Tensor: Decoded bits (hard decisions)
+            torch.Tensor: Decoded bits (hard decisions) [batch_size, num_vars]
         """
         batch_size = input_llr.shape[0]
         
@@ -263,14 +223,12 @@ class SimpleMessageGNNDecoder:
                     batch_idx
                 )
                 
-                # 3. Update variable values using posterior computation
-                # Only print debug info in final iteration
-                if iteration == self.num_iterations - 1:
-                    var_values = self.compute_posterior_llr(
-                        input_llr,
-                        check_to_var_messages,
-                        batch_idx
-                    )
+                # 3. Update variable values
+                var_values = self.compute_posterior_llr(
+                    input_llr,
+                    check_to_var_messages,
+                    batch_idx
+                )
             
             print("\n=== Iteration Summary ===")
             print(f"Variable values change (first 3):")
@@ -282,16 +240,16 @@ class SimpleMessageGNNDecoder:
         decoded_bits = (var_values < 0).float()
         
         print("\n=== Final Results ===")
-        print(f"Final LLR values:\n{var_values[0, :]}")
-        print(f"Decoded bits (first 3):\n{decoded_bits[0, :]}")
+        print(f"Final LLR values (first batch):\n{var_values[0]}")
+        print(f"Decoded bits (first batch):\n{decoded_bits[0]}")
         
-        # # Verify parity check equations
-        # for batch_idx in range(batch_size):
-        #     syndrome = torch.matmul(decoded_bits[batch_idx], self.H.t()) % 2
-        #     is_valid = torch.all(syndrome == 0)
-        #     print(f"\nBatch {batch_idx} codeword validity check (c × H^T = 0):")
-        #     print(f"Is valid codeword: {is_valid}")
-        #     if not is_valid:
-        #         print(f"Syndrome: {syndrome}")
+        # Verify parity check equations
+        for batch_idx in range(batch_size):
+            syndrome = torch.matmul(decoded_bits[batch_idx], self.H.t()) % 2
+            is_valid = torch.all(syndrome == 0)
+            print(f"\nBatch {batch_idx} codeword validity check (c × H^T = 0):")
+            print(f"Is valid codeword: {is_valid}")
+            if not is_valid:
+                print(f"Syndrome: {syndrome}")
         
         return decoded_bits 

@@ -3,20 +3,12 @@ Neural network models for LDPC decoding.
 """
 
 # Only import what we need
-from ldpc_neural_decoder.models.message_gnn_decoder import (
-    MessageGNNDecoder,
-    VariableGNNLayer,
-    CheckGNNLayer,
-    TannerToMessageGraph,
-    create_message_gnn_decoder,
-    get_llr_from_noise
-)
+from ldpc_neural_decoder.models.residual_weight_sharing_decoder import ResidualWeightSharingDecoder
+from ldpc_neural_decoder.utils.training_data_generator import load_training_data
+from debug_scripts.test_residual_decoder import load_base_matrix
 
 __all__ = [
-    'MessageGNNDecoder',
-    'VariableGNNLayer',
-    'CheckGNNLayer',
-    'TannerToMessageGraph',
-    'create_message_gnn_decoder',
-    'get_llr_from_noise'
+    'ResidualWeightSharingDecoder',
+    'load_training_data',
+    'load_base_matrix'
 ] 
