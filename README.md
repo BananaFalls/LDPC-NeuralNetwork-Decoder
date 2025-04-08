@@ -1,133 +1,137 @@
-# Neural LDPC Decoder
+# LDPC Neural Network Decoder
 
-This project implements a neural network-based decoder for Low-Density Parity-Check (LDPC) codes, specifically focusing on 5G LDPC codes. The implementation includes both traditional and residual weight-sharing decoders.
+A neural network-based LDPC decoder implementation using PyTorch, featuring weight sharing and residual connections.
 
-## Features
+## Overview
 
-- Implementation of 5G LDPC codes with configurable expansion factor
-- Neural network-based decoder with weight sharing
-- Residual connections for improved gradient flow
-- Training data generation with BPSK modulation and AWGN noise
-- Comprehensive training pipeline with metrics tracking
-- Visualization of training progress (BER and FER plots)
+This project implements a neural LDPC decoder that combines traditional message passing with neural network components. The decoder uses weight sharing across circulant blocks and incorporates residual connections to improve training stability and performance.
 
-## Project Structure
+## Key Features
 
-```
-LDPC-NeuralNetwork-Decoder/
-├── ldpc_neural_decoder/
-│   ├── models/
-│   │   ├── weight_sharing_decoder.py
-│   │   └── residual_weight_sharing_decoder.py
-│   └── utils/
-│       ├── llr_generator.py
-│       └── training_data_generator.py
-├── debug_scripts/
-│   ├── test_weight_sharing_decoder.py
-│   ├── test_residual_decoder.py
-│   ├── train_residual_decoder.py
-│   └── generate_training_data.py
-├── training_data/
-│   ├── train_data_z4.pt
-│   ├── val_data_z4.pt
-│   └── test_data_z4.pt
-├── training_results/
-│   ├── ber_plot.png
-│   └── fer_plot.png
-└── checkpoints/
-    └── residual_decoder_z4_[timestamp]/
-        ├── best_model.pt
-        ├── checkpoint_epoch_N.pt
-        └── config.json
-```
+- **Weight Sharing**: Weights are shared across circulant blocks corresponding to the same base matrix element
+- **Residual Connections**: Combines outputs from previous iterations to improve gradient flow
+- **Neural Message Processing**: Uses a neural network for message processing
+- **Efficient Implementation**: Optimized for both training and inference
+- **5G LDPC Code Support**: Compatible with 5G LDPC codes
+
+## Architecture
+
+The decoder consists of several key components:
+
+1. **Base Matrix Expansion**
+   - Expands base matrix into full H matrix using circulants
+   - Supports various expansion factors (z)
+
+2. **Message Passing System**
+   - Variable node updates with shared weights
+   - Check node updates with min-sum approximation
+   - Residual connections for improved performance
+
+3. **Neural Network Components**
+   - Message processor with linear layers and ReLU activation
+   - Shared weights for variable-to-check and check-to-variable messages
+   - Residual connection weights
+
+## Training Process
+
+The training process includes:
+
+1. **Data Generation**
+   - Batch size: 64
+   - SNR range: [-1, 8] dB
+   - Total examples: 320,000 (training)
+   - Split ratio: 80% train, 10% validation, 10% test
+
+2. **Training Configuration**
+   - Number of epochs: 50
+   - Learning rate: 1e-3
+   - Number of iterations: 10
+   - Residual depth: 2
+
+3. **Optimization**
+   - SGD optimizer with momentum (0.9)
+   - L2 regularization (weight decay: 1e-2)
+   - Learning rate scheduling
+
+## Implementation Details
+
+### Message Passing
+
+The decoder performs message passing in the following steps:
+
+1. **Variable Node Update**
+   - Combines channel LLR with messages from check nodes
+   - Applies shared weights
+   - Incorporates residual connections
+
+2. **Check Node Update**
+   - Uses min-sum approximation
+   - Applies shared weights
+   - Processes messages through neural network
+
+3. **Posterior LLR Computation**
+   - Combines channel LLR with weighted check node messages
+   - Updates variable node values
+
+### Weight Management
+
+- Weights are shared based on base matrix structure
+- Separate weights for variable-to-check and check-to-variable messages
+- Residual connection weights for previous iterations
+
+## Requirements
+
+- Python 3.7+
+- PyTorch 1.7+
+- NumPy
+- Matplotlib (for visualization)
 
 ## Installation
 
-1. Clone the repository:
 ```bash
 git clone https://github.com/yourusername/LDPC-NeuralNetwork-Decoder.git
 cd LDPC-NeuralNetwork-Decoder
-```
-
-2. Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
 ## Usage
 
-### Training Data Generation
+1. **Training**
+```python
+from ldpc_neural_decoder.models import ResidualWeightSharingDecoder
 
-Generate training data with specified parameters:
-```bash
-python debug_scripts/generate_training_data.py
+# Initialize decoder
+decoder = ResidualWeightSharingDecoder(
+    base_matrix=base_matrix,
+    expansion_factor=4,
+    num_iterations=10,
+    residual_depth=2
+)
+
+# Train decoder
+train_decoder(decoder, train_data, val_data)
 ```
 
-This will create:
-- Training set (80% of data)
-- Validation set (10% of data)
-- Test set (10% of data)
+2. **Inference**
+```python
+# Load trained model
+decoder.load_state_dict(torch.load('checkpoints/best_model.pt'))
 
-### Training the Residual Decoder
-
-Train the residual weight-sharing decoder:
-```bash
-python debug_scripts/train_residual_decoder.py
+# Decode received LLRs
+decoded_bits = decoder(input_llrs)
 ```
 
-The training script will:
-- Create checkpoints directory with timestamp
-- Save best model based on validation loss
-- Generate BER and FER plots
-- Track training progress
+## Performance
 
-### Testing the Decoder
-
-Test the decoder's performance:
-```bash
-python debug_scripts/test_residual_decoder.py
-```
-
-## Model Architecture
-
-### Residual Weight-Sharing Decoder
-
-The residual decoder extends the traditional weight-sharing decoder with:
-- Residual connections between iterations
-- Configurable residual depth
-- Improved gradient flow
-- Better convergence properties
-
-Key parameters:
-- Expansion factor (z)
-- Number of iterations
-- Residual depth
-- Learning rate
-- Batch size
-
-## Training Process
-
-The training process includes:
-1. Data generation with BPSK modulation and AWGN noise
-2. Training loop with SGD optimizer
-3. Validation after each epoch
-4. Learning rate scheduling
-5. Checkpoint saving
-6. Metrics visualization
-
-## Results
-
-Training results are stored in:
-- `training_results/`: Contains BER and FER plots
-- `checkpoints/`: Contains model checkpoints and configurations
+The decoder achieves:
+- Improved BER performance over traditional decoders
+- Efficient memory usage through weight sharing
+- Stable training with residual connections
+- Fast convergence with optimized message passing
 
 ## Contributing
 
-1. Fork the repository
-2. Create your feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a new Pull Request
+Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 

@@ -293,32 +293,49 @@ class ResidualWeightSharingDecoder(nn.Module):
     
     def _compute_posterior_llr(self, input_llr, check_to_var_messages, batch_idx):
         """
-        Compute posterior LLR with shared weights
+        Compute posterior LLR (Log-Likelihood Ratio) with shared weights.
+        This function combines channel LLRs with messages from check nodes to compute
+        the final LLR for each variable node.
+        
+        Args:
+            input_llr: Initial channel LLRs [batch_size, num_variables]
+            check_to_var_messages: Messages from check nodes to variable nodes
+            batch_idx: Current batch index
+        
+        Returns:
+            posterior_llr: Updated LLRs after combining channel and check node messages
         """
+        # Initialize posterior LLRs with channel LLRs
         posterior_llr = input_llr.clone()
         
+        # Iterate through each variable node
         for var_idx in range(self.H.shape[1]):
+            # Get channel LLR for current variable node
             channel_llr = input_llr[:, var_idx]
             
+            # Find all check nodes connected to current variable node
             connected_checks = torch.where(self.H[:, var_idx] == 1)[0]
+            
+            # Collect message indices for all connected check nodes
             msg_indices = []
             for check_idx in connected_checks:
+                # Find the message index that connects this check node to the variable node
                 msg_idx = next(m for m in self.var_to_messages[var_idx]
                              if m in self.check_to_messages[check_idx])
                 msg_indices.append(msg_idx)
             
+            # If there are connected check nodes
             if msg_indices:
+                # Get messages from all connected check nodes
                 messages = check_to_var_messages[:, msg_indices]
-                weights = torch.stack([self._get_weight(idx) for idx in msg_indices]).T
-                # print(f"[compute_posterior_llr debug 1] weights shape: {weights.shape}")
-                # print(f"[compute_posterior_llr debug 2] weights: {weights}")
-                # print(f"[compute_posterior_llr debug 3] messages shape: {messages.shape}")
-                # print(f"[compute_posterior_llr debug 4] messages: {messages}")
-
-                weighted_sum = torch.sum(messages * weights, dim=1)
-                # print(f"[compute_posterior_llr debug 5] weighted_sum shape: {weighted_sum.shape}")
-                # print(f"[compute_posterior_llr debug 6] weighted_sum: {weighted_sum}")
                 
+                # Get shared weights for all messages
+                weights = torch.stack([self._get_weight(idx) for idx in msg_indices]).T
+                
+                # Compute weighted sum of messages
+                weighted_sum = torch.sum(messages * weights, dim=1)
+                
+                # Update posterior LLR by combining channel LLR with weighted sum
                 posterior_llr[:, var_idx] = channel_llr + weighted_sum
         
         return posterior_llr 

@@ -15,7 +15,7 @@ class SimpleMessageGNNDecoder:
         """
         self.H = H_matrix
         self.num_iterations = num_iterations
-        
+
         # Create message indices for each node
         self.var_to_messages = [[] for _ in range(self.H.shape[1])]  # Variable node -> message indices
         self.check_to_messages = [[] for _ in range(self.H.shape[0])]  # Check node -> message indices
