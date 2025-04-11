@@ -133,19 +133,33 @@ For detailed documentation, see the [docs](docs/) directory:
 ```
 LDPC-NeuralNetwork-Decoder/
 ├── docs/                    # Documentation
-│   ├── architecture/        # Architecture details
-│   ├── implementation/      # Implementation guides
-│   ├── training/           # Training documentation
-│   ├── results/            # Results and analysis
-│   └── usage/              # Usage guides
-├── src/                    # Source code
-│   ├── neural_decoder.py   # Main decoder implementation
+│   ├── code/               # Code explanations
+│   │   ├── neural_decoder_explanation.txt
+│   │   └── code_explanation.txt
+│   ├── report/             # Project report
+│   │   ├── REPORT_STRUCTURE.md
+│   │   ├── IMPLEMENTATION.md
+│   │   ├── RESULTS.md
+│   │   ├── CONCLUSION.md
+│   │   ├── REFERENCES.md
+│   │   └── APPENDICES.md
+│   └── thesis/             # Thesis documentation
+│       ├── complete_thesis.txt
+│       └── thesis_sections.txt
+├── ldpc_neural_decoder/    # Source code
+│   ├── models/             # Model implementations
+│   │   └── residual_weight_sharing_decoder.py
 │   ├── training.py         # Training utilities
 │   └── evaluation.py       # Evaluation tools
 ├── tests/                  # Test files
+│   ├── test_neural_decoder.py
+│   └── test_training.py
 ├── data/                   # Data and results
+│   ├── training_data/      # Training datasets
+│   └── results/            # Evaluation results
 ├── requirements.txt        # Dependencies
-└── README.md              # This file
+├── README.md              # This file
+└── LICENSE                # MIT License
 ```
 
 ## Contributing
