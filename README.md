@@ -2,6 +2,20 @@
 
 A PyTorch implementation of a neural network-based LDPC decoder with residual connections and weight sharing.
 
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [Training](#training)
+  - [Evaluation](#evaluation)
+- [Training Parameters](#training-parameters)
+- [Performance](#performance)
+- [Documentation](#documentation)
+- [Project Structure](#project-structure)
+- [Contributing](#contributing)
+- [License](#license)
+
 ## Features
 
 - **Residual Weight-Sharing Architecture**
@@ -106,7 +120,33 @@ print(f"FER: {results['fer']}")
 
 ## Documentation
 
-For detailed documentation, see the [docs](docs/) directory.
+For detailed documentation, see the [docs](docs/) directory:
+
+- [Architecture Overview](docs/architecture/overview.md)
+- [Implementation Details](docs/implementation/core_components.md)
+- [Training Guide](docs/training/parameters.md)
+- [Results Analysis](docs/results/metrics.md)
+- [API Reference](docs/usage/api.md)
+
+## Project Structure
+
+```
+LDPC-NeuralNetwork-Decoder/
+├── docs/                    # Documentation
+│   ├── architecture/        # Architecture details
+│   ├── implementation/      # Implementation guides
+│   ├── training/           # Training documentation
+│   ├── results/            # Results and analysis
+│   └── usage/              # Usage guides
+├── src/                    # Source code
+│   ├── neural_decoder.py   # Main decoder implementation
+│   ├── training.py         # Training utilities
+│   └── evaluation.py       # Evaluation tools
+├── tests/                  # Test files
+├── data/                   # Data and results
+├── requirements.txt        # Dependencies
+└── README.md              # This file
+```
 
 ## Contributing
 
