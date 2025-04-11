@@ -213,4 +213,59 @@ class ResidualWeightSharingDecoder(nn.Module):
            check_to_var_messages: Messages from check nodes
            batch_idx: Batch index
        """
-   ``` 
+   ```
+
+## 1. Architecture
+- [Overview](architecture/overview.md)
+- [Neural Network Structure](architecture/neural_network.md)
+- [Residual Connections](architecture/residual_connections.md)
+- [Weight Sharing](architecture/weight_sharing.md)
+- [GPU Acceleration](architecture/gpu_acceleration.md)
+
+## 2. Implementation
+- [Core Components](implementation/core_components.md)
+- [Training Process](implementation/training_process.md)
+- [Performance Optimizations](implementation/optimizations.md)
+- [Error Handling](implementation/error_handling.md)
+- [Memory Management](implementation/memory_management.md)
+
+## 3. Training
+- [Data Generation](training/data_generation.md)
+- [Training Parameters](training/parameters.md)
+  - Epochs: 50
+  - Batch Size: 64
+  - Learning Rate: 1e-3
+  - Momentum: 0.9
+  - Weight Decay: 1e-2
+  - Iterations: 10
+  - Residual Depth: 2
+  - Expansion Factor: 4
+  - SNR Range: -1 to 8 dB
+  - Data Split: 80/10/10
+- [Loss Functions](training/loss_functions.md)
+- [Optimization](training/optimization.md)
+- [GPU Training](training/gpu_training.md)
+
+## 4. Results
+- [Performance Metrics](results/metrics.md)
+- [Comparative Analysis](results/comparison.md)
+- [Visualizations](results/visualizations.md)
+- [Ablation Studies](results/ablation.md)
+
+## 5. Usage
+- [Installation](usage/installation.md)
+- [Quick Start](usage/quick_start.md)
+- [API Reference](usage/api.md)
+- [Examples](usage/examples.md)
+- [Troubleshooting](usage/troubleshooting.md)
+
+## 6. Development
+- [Code Structure](development/structure.md)
+- [Testing](development/testing.md)
+- [Contributing](development/contributing.md)
+- [Version History](development/versions.md)
+
+## 7. References
+- [Papers](references/papers.md)
+- [Documentation](references/documentation.md)
+- [Resources](references/resources.md) 
